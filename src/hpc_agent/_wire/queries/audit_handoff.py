@@ -18,7 +18,7 @@ draft).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -149,5 +149,47 @@ class AuditHandoffResult(BaseModel):
             "Honest notes about what was and was not derivable (e.g. multiple "
             "summary_artifact candidates, no goal recorded at audit open, an "
             "ambiguous entry point). Advisory; never blocks."
+        ),
+    )
+
+    # ── the onboard chain's block surface (P2.c) ─────────────────────────────
+    stage_reached: Literal["placeholders_resolvable", "needs_intent"] = Field(
+        default="needs_intent",
+        description=(
+            "The terminator this projection stopped at (decision-as-data). "
+            "`placeholders_resolvable` = every remaining placeholder is a field a "
+            "LATER onboard block owns (task_generator/task_count via "
+            "wrap-entry-point-auto's composed interview_spec, produced_by via the "
+            "interview's operator default, an ambiguous entry_point via wrap's own "
+            "ladder) — the chain advances. `needs_intent` = the audit-open seat "
+            "recorded no `goal`, a REQUIRED_CALLER_FIELD nothing downstream can "
+            "derive, so the chain PARKS here with one composed ask."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=True,
+        description=(
+            "True at `needs_intent` — the human states the goal (an utterance, "
+            "never agreement to a next block). False at "
+            "`placeholders_resolvable`: nothing is being asked."
+        ),
+    )
+    brief: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The code-composed ask the `needs_intent` park relays: the missing "
+            "human-owned field, the audit's recorded task-axis utterances as "
+            "guidance, and the projection's own disclosures — assembled from THIS "
+            "result's fields so the seam never asks for something it already "
+            "derived. Empty at `placeholders_resolvable`."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The deterministically-computed next block — `{verb, why, spec_hint}` "
+            "— or null at the `needs_intent` human branch. The spec_hint IS "
+            "wrap-entry-point-auto's complete input spec (the onboard chain is "
+            "ungated, so the driver passes it verbatim)."
         ),
     )

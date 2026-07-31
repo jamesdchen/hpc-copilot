@@ -187,6 +187,36 @@ def _terminal_state(module_audit: ModuleAudit) -> str | None:
 _PENDING_STATUSES = frozenset({"unsigned", "signed_stale"})
 
 
+def _attach_s1_preview(experiment_dir: Path, brief: dict[str, Any]) -> None:
+    """Meld the READ-ONLY S1 brief into the sign-off park's brief, in place (P2.c).
+
+    R-c ("parks carry RESULTS, never requests") applied to the LAST sitting before
+    a submit. The sign-off rendezvous is a sitting the human is already in; making
+    them come back for a second one to answer "shall we run this?" — a question
+    the deterministic walk can already answer — is the attended-latency class this
+    closes. So when an ``interview.json`` exists, the brief additionally carries
+    what ``submit-s1`` would say: its own walk, its ambiguities with their
+    pre-filled recommendations, and the standing-consent bar.
+
+    ABSENT AND HONEST when no interview exists (:func:`s1_meld.compose_s1_preview`
+    returns ``None``): the brief gains no key at all, because there is no submit
+    to preview and a plan assembled from the audit records would be a plan the
+    human never authored sitting beside a signature request. That silence is the
+    contract, not an omission — it is pinned by its own test.
+
+    Composed READ-ONLY: no run is minted, no sidecar written, no cluster touched.
+    Never raises — the meld is a disclosure and must never fail a sign-off park.
+    """
+    from hpc_agent.ops.s1_meld import compose_s1_preview
+
+    try:
+        preview = compose_s1_preview(experiment_dir)
+    except Exception:  # noqa: BLE001 — a disclosure never fails the park
+        return
+    if preview is not None:
+        brief["s1_preview"] = preview
+
+
 def _signoff_brief(
     spec: NotebookStatusSpec, sections: list[NotebookSectionStatus], passed: bool
 ) -> dict[str, Any]:
@@ -403,6 +433,15 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
     )
     needs_decision = not module_audit.passed
     brief = _signoff_brief(spec, sections, module_audit.passed)
+    # THE S1 MELD (P2.c): the sign-off park is the human's last sitting before a
+    # submit, so it carries the submit brief too. Scoped to the ``sections_pending``
+    # STAGE, not to ``needs_decision``: the two are equivalent today (the block has
+    # exactly two terminators and only one of them asks), and keying on the derived
+    # flag would silently start melding into any FUTURE park this block grows — a
+    # boundary whose question might have nothing to do with a submit. The audit
+    # PASS chains onward and asks nothing, so it needs no preview.
+    if stage_reached == "sections_pending":
+        _attach_s1_preview(experiment_dir, brief)
     result_kwargs: dict[str, Any] = {
         "audit_id": spec.audit_id,
         "sections": sections,

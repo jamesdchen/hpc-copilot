@@ -224,8 +224,80 @@ class WrapEntryPointAutoInput(BaseModel):
         ),
     )
 
+    # -- chain carry (onboard chain, P2.c) ---------------------------------
+    audited_source: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "OPAQUE CARRY, never read by this verb: the audit-handoff projection's "
+            "audited_source block ({source, audit_id, template, roots}), threaded "
+            "through so the `interview` two hops later can declare the audit "
+            "provenance the chain already produced. Echoed verbatim on the "
+            "onboarded result. Same posture as notebook-status's `review` field "
+            "(P2.b): a chain that discards a product it built one hop earlier "
+            "forces the next block to re-derive it."
+        ),
+    )
+
 
 # ── Result: shared sub-shapes ────────────────────────────────────────────
+
+
+class _BlockSurface(BaseModel):
+    """The block-chain surface every ``wrap-entry-point-auto`` shape carries (P2.c).
+
+    ``wrap-entry-point-auto`` became a BLOCK of the ``onboard`` chain, so each of
+    its four discriminated shapes declares the same three fields every other block
+    Result declares: which terminator it reached, whether an actor is owed an
+    answer there, and the deterministic successor (null at every escalation — all
+    of them are parks). Declared ONCE here and mixed in, so a shape cannot acquire
+    a different vocabulary for the same question.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage_reached: Literal[
+        "onboarded",
+        "needs_pick",
+        "needs_intent",
+        "needs_wrapper_argv",
+        "needs_wrapper_argv_unsupported",
+    ] = Field(
+        description=(
+            "The terminator this call stopped at: `onboarded`, `needs_pick`, "
+            "`needs_intent`, `needs_wrapper_argv` (the AGENT park — params were "
+            "mechanically extracted, so the argv template is transcription) or "
+            "`needs_wrapper_argv_unsupported` (the HUMAN park — nothing was "
+            "extractable, so the argv shape is the caller's own knowledge of "
+            "their tool). A CLOSED enum on purpose: the argv split decides WHICH "
+            "ACTOR answers, and the dangerous direction (routing an unextractable "
+            "entry point to the LLM, which would then invent flags nothing can "
+            "parse) must be a type error as well as a test failure."
+        ),
+    )
+    needs_decision: bool = Field(
+        description=(
+            "True at every escalation (an actor — human or LLM — is owed an "
+            "answer), False at `onboarded`."
+        ),
+    )
+    brief: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The code-composed ONE ask a park relays: the candidates for a pick, "
+            "the field list for missing intent, the extracted params + argv head "
+            "for a wrapper argv. Assembled from this result's own fields — the "
+            "park never asks for something the composite already derived. Empty "
+            "at `onboarded`."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "`{verb, why, spec_hint}` at `onboarded` (the spec_hint IS the "
+            "`interview` verb's complete input spec — the onboard chain is "
+            "ungated, so the driver passes it verbatim), null at every escalation."
+        ),
+    )
 
 
 class _EntryCandidate(BaseModel):
@@ -311,10 +383,8 @@ class _ParamPartition(BaseModel):
 # ── Result: the four terminal shapes ─────────────────────────────────────
 
 
-class _OnboardedResult(BaseModel):
+class _OnboardedResult(_BlockSurface):
     """Terminal success: every deterministic step composed."""
-
-    model_config = ConfigDict(extra="forbid")
 
     onboarded: Literal[True] = Field(
         description=(
@@ -375,6 +445,15 @@ class _OnboardedResult(BaseModel):
         ),
     )
     partition: _ParamPartition = Field(description="The fixed-params partition (SKILL Step 5b).")
+    audited_source: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The opaque `audited_source` carry echoed back verbatim (onboard "
+            "chain, P2.c) — present only when the caller threaded one in. The "
+            "chain's interview composer folds it into the InterviewSpec so the "
+            "audit provenance survives the hop; this verb never reads it."
+        ),
+    )
     interview_spec: dict[str, Any] = Field(
         description=(
             "The composed InterviewSpec fragment — goal / task_count / "
@@ -389,10 +468,8 @@ class _OnboardedResult(BaseModel):
     )
 
 
-class _NeedsPickResult(BaseModel):
+class _NeedsPickResult(_BlockSurface):
     """Terminal escalation: an entry-point or entry-function tie."""
-
-    model_config = ConfigDict(extra="forbid")
 
     needs_pick: Literal[True] = Field(
         description=(
@@ -427,10 +504,8 @@ class _NeedsPickResult(BaseModel):
     )
 
 
-class _NeedsIntentResult(BaseModel):
+class _NeedsIntentResult(_BlockSurface):
     """Terminal escalation: a human-owned field is missing."""
-
-    model_config = ConfigDict(extra="forbid")
 
     needs_intent: Literal[True] = Field(
         description=(
@@ -475,10 +550,8 @@ class _NeedsIntentResult(BaseModel):
     )
 
 
-class _NeedsWrapperArgvResult(BaseModel):
+class _NeedsWrapperArgvResult(_BlockSurface):
     """Terminal escalation: the wrapper pathway needs a caller argv + signature."""
-
-    model_config = ConfigDict(extra="forbid")
 
     needs_wrapper_argv: Literal[True] = Field(
         description=(

@@ -141,6 +141,14 @@ _IN_PROCESS_ELIGIBLE_VERBS: frozenset[str] = frozenset(
         "notebook-audit-view",
         "notebook-status",
         "audit-handoff",
+        # The onboard family (P2.c), by the SAME bar: an AST scan + at most one
+        # in-place decoration (``wrap-entry-point-auto``) and a local tasks.py
+        # materialize + dry-resolve (``interview``). Neither declares ssh or a
+        # scheduler mutation, neither joins WATCH_VERBS, and an onboard tick chains
+        # three spans — so the subprocess seam would charge three interpreter cold
+        # starts for work measured in milliseconds.
+        "wrap-entry-point-auto",
+        "interview",
     }
 )
 
@@ -2054,6 +2062,8 @@ def _compose_standing_offer_for_park(
     if is_anomaly_terminator:
         return None
     from hpc_agent.ops.overnight import (
+        STANDING_CONSENT_BAR,
+        compose_spend_envelope,
         regrant_offer_from_status,
         render_grant_line,
         standing_consent_status,
@@ -2106,6 +2116,20 @@ def _compose_standing_offer_for_park(
         "scope_kind": "run",
         "run_id": run_id,
         "cmd_sha": cmd_sha,
+        # R-a (ex-post-trust ruling, 2026-07-30): standing run-consent is the
+        # DEFAULT mode, offered at the run's FIRST rendezvous rather than at
+        # nightfall. Two disclosures ride with it, both required by the R1
+        # amendment's D1 bar and neither a new trust surface:
+        #
+        #   * ``bar`` — the ONE statement of what the two answers mean (bare ``y``
+        #     = this boundary only; the typed line = standing consent). Rendered
+        #     from the grant vocabulary's own home so it cannot drift from the
+        #     gate that reads the line back.
+        #   * ``spend_envelope`` — what the grant would authorize, in the SAME
+        #     arithmetic submit-s2's brief renders. Absent (never fabricated) when
+        #     no sidecar exists yet: an invented spend figure beside a consent
+        #     request would be worse than no figure at all.
+        "bar": STANDING_CONSENT_BAR,
         "note": (
             "OPTIONAL standing-consent offer: pasting this line into chat is "
             "the human's own typed grant of the overnight-consent AUTHORSHIP "
@@ -2114,6 +2138,9 @@ def _compose_standing_offer_for_park(
             "and nothing here is auto-filled or auto-selected."
         ),
     }
+    envelope = compose_spend_envelope(experiment_dir, run_id)
+    if envelope is not None:
+        offer["spend_envelope"] = envelope
     if cluster:
         offer["cluster"] = cluster
     if regrant is not None:

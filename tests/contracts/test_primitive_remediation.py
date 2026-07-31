@@ -498,7 +498,12 @@ XFAIL_NEEDS_FIXTURE: set[str] = set()
 # (their xfail belongs in the "needs richer fixture" punch list, not
 # masquerading as a remediation failure).
 NEEDS_EXTRA_CLI_ARGS: set[str] = {
-    "interview",  # --campaign-dir
+    # ``interview`` LEFT this list on 2026-07-30 (prelude P2.c): it joined the
+    # ``onboard`` block chain, and a chained span is invoked with the standard
+    # ``--spec/--experiment-dir`` argv, so ``--campaign-dir`` became optional and
+    # the spec-validate path is reachable from this probe. The entry is deleted
+    # rather than kept-and-xfailed: an xfail that would now XPASS is a lie about
+    # coverage.
     "resubmit",  # --run-id + --task-ids
     "stray-sweep",  # --ssh-target (required; argparse rejects before the spec gate)
 }

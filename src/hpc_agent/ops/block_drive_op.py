@@ -99,6 +99,10 @@ def _count_drive_attempt(experiment_dir: Path, result: BlockDriveResult) -> None
         "notebook-audit-view",
         "notebook-status",
         "audit-handoff",
+        # The onboard family (P2.c) — the audit→submit bridge's two remaining
+        # deterministic verbs (``audit-handoff`` is shared: it is the chain's head).
+        "wrap-entry-point-auto",
+        "interview",
     ],
     side_effects=[
         SideEffect("spawns-subprocess", "hpc-agent <block verb> per chained span"),

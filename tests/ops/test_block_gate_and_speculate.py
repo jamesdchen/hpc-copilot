@@ -328,7 +328,7 @@ def _resolved_s1(tmp_path: Path, *, cmd_sha: str = "deadbeef") -> Any:
 
 
 def test_s1_resolved_park_fires_speculative_canary_in_code(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("HPC_S1_SPECULATE", "1")
+    monkeypatch.delenv("HPC_S1_SPECULATE", raising=False)
     spec, fake_rr, submit_flow = _resolved_s1(tmp_path)
     with (
         mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
@@ -350,15 +350,61 @@ def test_s1_resolved_park_fires_speculative_canary_in_code(tmp_path: Path, monke
     assert fired["detach"] is False
 
 
-def test_s1_speculation_off_by_default(tmp_path: Path, monkeypatch) -> None:
+def test_s1_speculation_is_chain_driven_and_on_by_default(tmp_path: Path, monkeypatch) -> None:
+    """P2.c REVERSAL: the canary fires with NO env set — the chain drives it.
+
+    Row 22 shipped the machinery behind ``HPC_S1_SPECULATE=1``, OFF by default,
+    and nothing ever exported it, so the canary that was supposed to be green
+    before the human answered never fired once. This test is the old
+    ``test_s1_speculation_off_by_default`` INVERTED: it pins that an unset
+    environment now SPECULATES, which is the user ruling ("the canary fires while
+    the human reads the proposed experiment") made mechanical. The kill switch is
+    covered by its own test below.
+    """
     monkeypatch.delenv("HPC_S1_SPECULATE", raising=False)
     spec, fake_rr, _ = _resolved_s1(tmp_path)
     with (
         mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
         mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached") as launch,
     ):
-        submit_blocks.submit_s1(tmp_path, spec=spec)
+        result = submit_blocks.submit_s1(tmp_path, spec=spec)
+    launch.assert_called_once()
+    # R-c: the park carries the RESULT of the speculation, not silence.
+    assert result.brief["speculative_canary"]["fired"] is True
+
+
+def test_s1_speculation_kill_switch_disables_it(tmp_path: Path, monkeypatch) -> None:
+    """``HPC_S1_SPECULATE=0`` is the OPT-OUT (the flipped sense), and it works."""
+    monkeypatch.setenv("HPC_S1_SPECULATE", "0")
+    spec, fake_rr, _ = _resolved_s1(tmp_path)
+    with (
+        mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
+        mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached") as launch,
+    ):
+        result = submit_blocks.submit_s1(tmp_path, spec=spec)
     launch.assert_not_called()
+    outcome = result.brief["speculative_canary"]
+    assert outcome["fired"] is False
+    # The refusal NAMES the switch — an operator who disabled it must be able to
+    # see that it is what suppressed the canary.
+    assert "HPC_S1_SPECULATE=0" in outcome["reason"]
+
+
+def test_s1_speculation_kill_switch_only_fires_on_exact_zero(tmp_path: Path, monkeypatch) -> None:
+    """Any value other than ``"0"`` leaves speculation ON (a typo must not disable).
+
+    Guard-the-guard for the sense flip: the DEFAULT is now speculate, so a fat
+    -fingered ``HPC_S1_SPECULATE=false`` must not silently restore the old
+    never-fires behaviour that made the whole feature inert.
+    """
+    monkeypatch.setenv("HPC_S1_SPECULATE", "false")
+    spec, fake_rr, _ = _resolved_s1(tmp_path)
+    with (
+        mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
+        mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached") as launch,
+    ):
+        submit_blocks.submit_s1(tmp_path, spec=spec)
+    launch.assert_called_once()
 
 
 def test_s1_speculation_skips_ambiguous_walk(tmp_path: Path, monkeypatch) -> None:
@@ -366,7 +412,7 @@ def test_s1_speculation_skips_ambiguous_walk(tmp_path: Path, monkeypatch) -> Non
     from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesInput
     from hpc_agent._wire.workflows.submit_blocks import SubmitS1Spec
 
-    monkeypatch.setenv("HPC_S1_SPECULATE", "1")
+    monkeypatch.delenv("HPC_S1_SPECULATE", raising=False)
     walk = WalkSubmitAmbiguitiesInput.model_validate(
         {
             "cluster": None,
@@ -389,7 +435,7 @@ def test_s1_speculative_fire_leaves_the_journal_untouched(tmp_path: Path, monkey
     """The speculative fire writes the _detached/ handle only — no decision/brief."""
     from hpc_agent.state.decision_journal import read_decisions
 
-    monkeypatch.setenv("HPC_S1_SPECULATE", "1")
+    monkeypatch.delenv("HPC_S1_SPECULATE", raising=False)
     spec, fake_rr, _ = _resolved_s1(tmp_path)
     with (
         mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),

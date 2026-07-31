@@ -131,7 +131,10 @@ _CLI_VERBS = _verbs_with_cli()
 # Verbs whose CLI needs more than ``--spec`` to reach the spec-validate
 # step. Empty envelope on bad input today; covered by the punch list.
 NEEDS_EXTRA_CLI_ARGS: set[str] = {
-    "interview",  # --campaign-dir
+    # ``interview`` LEFT this list on 2026-07-30 (prelude P2.c) — see the twin
+    # note in ``test_primitive_remediation.py``: joining the onboard block chain
+    # made ``--campaign-dir`` optional (``--experiment-dir`` is the chain form),
+    # so this probe now reaches the spec-validate path for real.
     "resubmit",  # --run-id + --task-ids
 }
 

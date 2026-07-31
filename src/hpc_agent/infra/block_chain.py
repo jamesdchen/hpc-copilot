@@ -92,14 +92,25 @@ ORDER: dict[str, list[str]] = {
         "notebook-audit-view",
         "notebook-status",
     ],
-    # ``audit-handoff`` is the audit→onboard SEAM, not an audit touchpoint: it is
-    # the successor a PASSED audit hands off to, and it is where Wave P2.c will
-    # build the onboard chain. It gets its OWN single-member family for exactly
-    # the reason ``campaign-refill`` does — a WORKFLOW_OF entry + block_index(0)
-    # so the successor table's membership invariant holds, without perturbing the
-    # audit chain's block_index positions. P2.c re-homes it into the onboard
-    # family; nothing here builds that chain.
-    "audit-handoff": ["audit-handoff"],
+    # ── the onboard chain (prelude P2.c, 2026-07-30) ──────────────────────────
+    # The audit→submit bridge, mechanized. ``audit-handoff`` was P2.b's
+    # single-member seam family ("P2.c re-homes it into the onboard family"); this
+    # IS that re-home. Its ``block_index`` is unchanged (0, first in the chain), so
+    # the §4 field-change routing sees the same position it always did.
+    #
+    # The three blocks are the three deterministic transcription steps between a
+    # PASSED audit and a submit: project the durable audit records into a draft
+    # (``audit-handoff``), resolve the entry point / pathway / params
+    # (``wrap-entry-point-auto``), persist the intent + tasks.py (``interview``).
+    # None reaches a cluster, so none is in :data:`GATED_BLOCKS`; the chain's exit
+    # edge is ``interview → submit-s1``, where the ordinary submit gates resume.
+    #
+    # The four genuine judgment points the recon named (``docs/plans/
+    # prelude-chain-2026-07-30.md``) are all PRESERVED as parks: the human-owned
+    # intent fields (``goal`` at the handoff seam, ``needs_intent`` at wrap), the
+    # entry-point tie-break (``needs_pick``), and — the one AGENT park — the
+    # wrapper argv template the LLM composes from mechanically extracted params.
+    "onboard": ["audit-handoff", "wrap-entry-point-auto", "interview"],
 }
 
 # Each block verb → its workflow family. Derived from ORDER so the two can never
@@ -135,6 +146,15 @@ AGENT_PARKS: frozenset[tuple[str, str]] = frozenset(
         # next act is the LLM's — write/revise the percent-format source. Nothing
         # is authorized here and nothing is spent.
         ("audit-preflight", "awaiting_draft"),
+        # The onboard chain's wrapper-argv rendezvous (P2.c). ``detect-entry-point``
+        # MECHANICALLY extracted the CLI parameters (``argv_extraction ==
+        # "extracted"``, carried through on ``argv_params``), so what is owed is the
+        # TRANSCRIPTION of those params into an argv template + typed signature —
+        # authorship over a code-produced list, not a judgment about spend. The
+        # distinct ``needs_wrapper_argv_unsupported`` stage is deliberately NOT here:
+        # with no mechanical extraction the argv shape is the human's knowledge of
+        # their own tool, and inventing flags would be the ``halo_expr`` class.
+        ("wrap-entry-point-auto", "needs_wrapper_argv"),
     }
 )
 
@@ -215,8 +235,14 @@ DEADLINE_SECONDS: dict[str, float] = {
     "notebook-auto-clear": _QUICK_VERB_DEADLINE_SEC,
     "notebook-audit-view": _QUICK_VERB_DEADLINE_SEC,
     "notebook-status": _QUICK_VERB_DEADLINE_SEC,
-    # The audit→onboard seam the passed audit chains into: a pure local read.
+    # ── onboard family (P2.c) — every one is QUICK class ──────────────────────
+    # A pure local read (``audit-handoff``), an AST scan + at most one in-place
+    # decoration (``wrap-entry-point-auto``), and a local tasks.py materialize +
+    # dry-resolve (``interview``). None reaches a cluster or blocks on a poll, so
+    # none may fall through to the watch-class 24 h default.
     "audit-handoff": _QUICK_VERB_DEADLINE_SEC,
+    "wrap-entry-point-auto": _QUICK_VERB_DEADLINE_SEC,
+    "interview": _QUICK_VERB_DEADLINE_SEC,
 }
 
 
@@ -364,12 +390,47 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     # successor: the answer is a TYPED sign-off (append-decision, block
     # ``notebook-sign-off``), which no bare ``y`` can stand in for.
     ("notebook-status", "sections_pending"): None,
-    # passed → hand off to the audit→onboard SEAM. Emitting the hint is the whole
-    # of P2.b's obligation here; the onboard chain itself is Wave P2.c.
+    # passed → hand off to the audit→onboard SEAM (now the onboard chain's head).
     ("notebook-status", "audit_passed"): "audit-handoff",
-    # audit-handoff itself declares NO terminator here: its Result carries no
-    # ``next_block``, so the driver reads a terminal off the result and the chain
-    # ends at the seam. P2.c is what gives it stages.
+    # ── onboard family (P2.c) ─────────────────────────────────────────────────
+    # audit-handoff: the projection either hands the downstream blocks everything
+    # they need, or it stops at the ONE field nothing downstream can derive.
+    #
+    # ``placeholders_resolvable`` — every placeholder the projection emitted is a
+    # field a LATER block in this chain owns: ``task_generator`` / ``task_count``
+    # ride ``wrap-entry-point-auto``'s composed ``interview_spec``, ``produced_by``
+    # is composed by the interview's own P1.c operator default, and an ambiguous
+    # ``entry_point`` is exactly what wrap's entry-point ladder resolves (or
+    # escalates as ``needs_pick``, with the candidates).
+    ("audit-handoff", "placeholders_resolvable"): "wrap-entry-point-auto",
+    # ``needs_intent`` — the audit-open seat recorded NO goal. ``goal`` is a
+    # REQUIRED_CALLER_FIELD no block in this chain can derive (wrap echoes what it
+    # is given; the interview refuses without it), so the chain stops HERE rather
+    # than one hop later: parking at the seam is what lets the ONE composed ask
+    # carry the audit's own disclosures + task-axis utterances, which a wrap-side
+    # escalation would never have seen. A human branch — the answer is an
+    # utterance, not agreement.
+    ("audit-handoff", "needs_intent"): None,
+    # wrap-entry-point-auto: the four discriminated shapes, one stage each (plus
+    # the argv split, below).
+    ("wrap-entry-point-auto", "onboarded"): "interview",
+    # AGENT park (see AGENT_PARKS): the wrapper pathway with MECHANICALLY
+    # EXTRACTED params — the LLM transcribes them into an argv template.
+    ("wrap-entry-point-auto", "needs_wrapper_argv"): None,
+    # HUMAN park: no mechanical extraction was possible (``argv_extraction ==
+    # "unsupported"``), so the argv shape is the human's knowledge of their own
+    # tool. A distinct stage from the agent one BECAUSE the actor differs — the
+    # AGENT_PARKS registry is keyed by (verb, stage) and "who answers this" must
+    # be a deliberate edit, never a runtime sniff.
+    ("wrap-entry-point-auto", "needs_wrapper_argv_unsupported"): None,
+    # HUMAN parks: the entry-point tie-break and the missing human-owned fields.
+    # Both compose ONE ask carrying the candidates / the field list.
+    ("wrap-entry-point-auto", "needs_pick"): None,
+    ("wrap-entry-point-auto", "needs_intent"): None,
+    # interview → submit-s1: the onboard chain's EXIT edge into the submit chain.
+    # UNGATED (submit-s1 reaches no cluster), so the hint IS the spec — composed
+    # from the interview's own persisted intent by ``_compose_submit_s1_spec``.
+    ("interview", "interviewed"): "submit-s1",
 }
 
 
@@ -517,12 +578,14 @@ def _complete_spec_hint(successor: str, spec_hint: dict[str, Any]) -> dict[str, 
     successor's validator would bounce. Pinned by
     ``tests/contracts/test_spec_hint_completeness.py``.
 
-    Two mechanisms, in order of specificity: an AUDIT successor's spec is fully
-    COMPOSED from the audit config seat (:data:`_AUDIT_SPEC_COMPOSERS` — the
-    ungated chain passes the hint verbatim, so the hint has to BE the spec);
-    otherwise a registered identity SHAPER reshapes what the terminator passed.
+    Two mechanisms, in order of specificity: an UNGATED CHAIN successor's spec is
+    fully COMPOSED from what its predecessor produced (:data:`_UNGATED_SPEC_COMPOSERS`
+    — the audit seat for the audit family, the projection / wrap fragment /
+    interview intent for the onboard family; the driver passes the hint verbatim,
+    so the hint has to BE the spec); otherwise a registered identity SHAPER
+    reshapes what the terminator passed.
     """
-    composer = _AUDIT_SPEC_COMPOSERS.get(successor)
+    composer = _UNGATED_SPEC_COMPOSERS.get(successor)
     if composer is not None:
         composed: dict[str, Any] = composer(spec_hint, {}, {})
         return composed
@@ -760,8 +823,128 @@ _AUDIT_SPEC_COMPOSERS: dict[str, Any] = {
     "audit-handoff": _compose_audit_seat_only_spec("audit-handoff"),
 }
 
+
+# ── the onboard chain's composed successor specs (P2.c) ───────────────────────
+#
+# The onboard chain is UNGATED end to end, so — exactly like the audit family —
+# each terminator's ``spec_hint`` must ALREADY BE the successor's complete input
+# spec. Each composer projects what its PREDECESSOR produced onto the fields the
+# successor's ``extra="forbid"`` model declares, and refuses (Row 14) rather than
+# inventing a caller-owned field.
+#
+# All three are IDEMPOTENT, which for this family needs saying out loud: the
+# carrier key a composer reads (``interview_spec``) is NOT a field of the spec it
+# produces, so the park-time re-application in :func:`compose_successor_spec`
+# would otherwise see a "missing" carrier and refuse a spec it had just built.
+# Each therefore recognises its OWN output and returns it verbatim — and the
+# recognition is a POSITIVE shape test (the composed spec's own required fields),
+# never "the carrier is absent", so a genuinely empty hint still refuses.
+
+
+def _compose_wrap_entry_point_auto_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """audit-handoff→wrap-entry-point-auto: the projection's derivable fields.
+
+    ``goal`` is the audit-open utterance the human typed (a REQUIRED_CALLER_FIELD
+    REUSED, never invented — the ``placeholders_resolvable`` edge exists precisely
+    so this composer is never reached without one). ``entry_point_path`` is the
+    AUDITED SOURCE: the ``.py`` whose sections were signed off is the file whose
+    ``@register_run`` function the submit will invoke, so pointing the entry-point
+    ladder at anything else would onboard an unaudited file. ``run_name`` rides
+    only when the projection found EXACTLY one candidate (zero or several is an
+    ambiguity wrap's own ladder resolves or escalates as ``needs_pick``).
+
+    ``audited_source`` is carried OPAQUE — wrap never reads it — so the interview
+    two hops later can declare the audit provenance the chain produced. That is
+    the ``notebook-status.review`` carry precedent (P2.b): a chain that discards a
+    product it built one hop earlier asks the next block to re-derive it.
+    """
+    if isinstance(spec_hint.get("entry_point_path"), str) and "source" not in spec_hint:
+        return dict(spec_hint)  # idempotent re-application: already composed
+    goal = spec_hint.get("goal")
+    if not isinstance(goal, str) or not goal:
+        raise SuccessorSpecIncomplete("wrap-entry-point-auto", "goal")
+    source = spec_hint.get("source")
+    if not isinstance(source, str) or not source:
+        raise SuccessorSpecIncomplete("wrap-entry-point-auto", "source")
+    composed: dict[str, Any] = {"goal": goal, "entry_point_path": source}
+    run_name = spec_hint.get("run_name")
+    if isinstance(run_name, str) and run_name:
+        composed["run_name"] = run_name
+    audited_source = spec_hint.get("audited_source")
+    if isinstance(audited_source, dict) and audited_source:
+        composed["audited_source"] = dict(audited_source)
+    return composed
+
+
+def _compose_interview_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """wrap-entry-point-auto→interview: the composite's OWN ``interview_spec``.
+
+    ``_OnboardedResult.interview_spec`` is documented SUBMITTABLE as-is to the
+    ``interview`` primitive, so the composition is REUSE in its purest form: the
+    fragment wrap built IS the spec, plus the opaque ``audited_source`` block the
+    chain has been carrying since the handoff. Nothing is synthesized — an
+    escalation shape never reaches here (those edges are ``None``).
+    """
+    fragment = spec_hint.get("interview_spec")
+    if isinstance(fragment, dict) and fragment:
+        composed = dict(fragment)
+        audited_source = spec_hint.get("audited_source")
+        if isinstance(audited_source, dict) and audited_source and "audited_source" not in composed:
+            composed["audited_source"] = dict(audited_source)
+        return composed
+    # Idempotent re-application: an already-composed InterviewSpec carries the
+    # caller-owned fields the model requires. Recognised by THOSE, not by the
+    # absence of the carrier.
+    if isinstance(spec_hint.get("goal"), str) and spec_hint.get("task_count") is not None:
+        return dict(spec_hint)
+    raise SuccessorSpecIncomplete("interview", "interview_spec")
+
+
+def _compose_submit_s1_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """interview→submit-s1: the walk inputs the PERSISTED intent already answers.
+
+    The onboard chain's exit edge. Every field of ``WalkSubmitAmbiguitiesInput``
+    carries a schema default, so the composition is not about satisfying a
+    validator — it is about the walk not RE-ASKING what the interview just
+    journaled: ``goal`` / ``task_generator`` (the two REQUIRED_CALLER_FIELDS),
+    ``tasks_py_present`` (the interview wrote it), ``entry_point_resolved`` (the
+    interview validated it), and the configured clusters. The interview composes
+    that ``walk`` block; this projects it onto ``SubmitS1Spec``.
+
+    ``resolve`` is deliberately NOT composed: ``ResolveSubmitInputsSpec`` needs
+    ``remote_path`` + the build-submit-spec fields, which are caller-owned
+    deployment facts no audit or interview record holds. S1 therefore lands on its
+    PRE-RESOLVE boundary and parks — with the standing-consent offer (R-a) in the
+    brief. Fabricating them here is exactly the Row-14 class.
+    """
+    walk = spec_hint.get("walk")
+    if not isinstance(walk, dict):
+        raise SuccessorSpecIncomplete("submit-s1", "walk")
+    composed: dict[str, Any] = {"walk": dict(walk)}
+    run_preflight = spec_hint.get("run_preflight")
+    if isinstance(run_preflight, bool):
+        composed["run_preflight"] = run_preflight
+    return composed
+
+
+_ONBOARD_SPEC_COMPOSERS: dict[str, Any] = {
+    "wrap-entry-point-auto": _compose_wrap_entry_point_auto_spec,
+    "interview": _compose_interview_spec,
+    "submit-s1": _compose_submit_s1_spec,
+}
+
+# Every UNGATED chained successor whose ``spec_hint`` must already BE its complete
+# input spec (the driver passes it verbatim — ``block_drive._chain``).
+_UNGATED_SPEC_COMPOSERS: dict[str, Any] = {**_AUDIT_SPEC_COMPOSERS, **_ONBOARD_SPEC_COMPOSERS}
+
 # Every successor whose input spec the driver composes in code, gated or not.
-_SPEC_COMPOSERS: dict[str, Any] = {**_GATED_SPEC_COMPOSERS, **_AUDIT_SPEC_COMPOSERS}
+_SPEC_COMPOSERS: dict[str, Any] = {**_GATED_SPEC_COMPOSERS, **_UNGATED_SPEC_COMPOSERS}
 
 
 def compose_successor_spec(
@@ -781,10 +964,10 @@ def compose_successor_spec(
     is returned verbatim. Pure: computes the spec dict, writes nothing (the
     materialization I/O + validation live in the block-drive caller).
 
-    The AUDIT chain (P2.b) is the one UNGATED family that still registers
-    composers (:data:`_AUDIT_SPEC_COMPOSERS`): its hints are composed from the
-    audit config seat at ``next_block_hint`` time, and the composers are
-    idempotent, so re-composing here returns the same dict.
+    The AUDIT (P2.b) and ONBOARD (P2.c) chains are the UNGATED families that still
+    register composers (:data:`_UNGATED_SPEC_COMPOSERS`): their hints are composed
+    at ``next_block_hint`` time, and the composers are idempotent, so re-composing
+    here returns the same dict.
     """
     composer = _SPEC_COMPOSERS.get(successor)
     if composer is None:

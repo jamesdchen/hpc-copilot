@@ -109,3 +109,57 @@ principles enforcement rows for the reversal + new park actor.
   prose when the SKILL is rewired to call `wrap-entry-point-auto`);
   `argv_params` has no consumer yet (P2's chain composes argv from it);
   `conf/*.yml` glob gap preserved verbatim (contract change, needs ruling).
+
+- 2026-07-30 (P2.c, the capstone): the **`onboard` chain** landed —
+  `ORDER["onboard"] = [audit-handoff, wrap-entry-point-auto, interview]`,
+  chaining off the audit family's `audit_passed` hint and EXITING into
+  `submit-s1`. `audit-handoff` was re-homed out of its P2.b single-member
+  family (its `block_index` is unchanged at 0, so no §4 routing comparison
+  moved). Stage-keyed edges: handoff `placeholders_resolvable` →
+  wrap (its `needs_intent` is the ONE field nothing downstream can derive, a
+  missing recorded `goal`); wrap `onboarded` → interview, with its three
+  escalations split FOUR ways — `needs_wrapper_argv` is the chain's second
+  AGENT park (params were mechanically extracted, so the argv template is
+  transcription = authorship), `needs_wrapper_argv_unsupported` /
+  `needs_pick` / `needs_intent` are human parks; interview `interviewed` →
+  `submit-s1`. All three wire models gained the block surface, and
+  `compose_successor_spec` gained three IDEMPOTENT composers (the carrier keys
+  they read are not fields of the specs they produce, so each recognises its
+  own output by a positive shape test).
+
+  Three rulings landed with it. **R-a**: the standing-consent offer at a
+  run-scope park now carries the D1 BAR (`overnight.STANDING_CONSENT_BAR` —
+  bare `y` = this boundary only; the typed line = standing consent) and the
+  FULL spend envelope (`overnight.compose_spend_envelope`, the same arithmetic
+  submit-s2's brief renders; ABSENT, never fabricated, when no sidecar exists).
+  **R-c**: the audit sign-off park carries an `s1_preview` — S1's own walk run
+  READ-ONLY over the persisted interview intent — and is absent-and-honest when
+  no interview exists. **R-b**: NO gate was removed; the shrink is consent-mode
+  behaviour, pinned by `tests/ops/test_onboard_chain.py::
+  test_one_typed_grant_covers_the_whole_submit_chain` (all four `GATED_BLOCKS`
+  still gated, all four cleared by ONE typed grant).
+
+  **Reversal recorded**: Row 22's `HPC_S1_SPECULATE=1` opt-in is REVERSED to a
+  kill switch (`=0` disables). The opt-in was never once exported, so the
+  canary that was meant to be green before the human answered never fired —
+  a shipped feature that was really a documented intention. The fire is now
+  chain-driven and ON by default, with ONE definition
+  (`ops/s1_meld.fire_speculative_canary`) shared by the S1 park and the meld.
+
+  Two CLI/seam changes worth naming: `interview`'s `--campaign-dir` became
+  OPTIONAL with `--experiment-dir` as the chain form (a chained span is invoked
+  with the standard argv, so a bespoke-flag-only verb could never be one) —
+  which also DROPPED `interview` from the `NEEDS_EXTRA_CLI_ARGS` xfail lists in
+  two contract batteries, since the spec-validate path is now reachable; and
+  `WrapEntryPointAutoInput` gained an OPAQUE `audited_source` carry (the
+  `notebook-status.review` precedent) so the audit provenance survives the hop
+  into the interview.
+
+  Regen for the changed wire models + `interview`'s CLI shape is DEFERRED to the
+  wave's serial rebake and ledgered in `docs/internals/regen-debt-ledger.md`.
+  Deliberately NOT done: the onboard TERMINAL does not call the queue-intake
+  producer (no run_id exists there — a call that could never fire is a dead
+  guard), so the single producer seat is `submit-s1`'s fresh entry; and the
+  melded park DISCLOSES where the canary fires rather than firing it there (a
+  standing consent and a canary both need a run identity the sign-off boundary
+  does not have).
