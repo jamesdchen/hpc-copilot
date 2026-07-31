@@ -33,8 +33,19 @@ def _ssh_g(*, proxyjump: str | None, hostname: str = TARGET) -> str:
 
 
 def _fake_resolution(monkeypatch: pytest.MonkeyPatch, stdout: str, rc: int = 0) -> None:
+    """Serve *stdout* for TARGET's resolution; IDENTITY for every other token.
+
+    ``sense_leg`` resolves each hop token through its own ``ssh -G`` pass
+    (the 2026-07-30 alias fix), so a static single-answer fake would leak
+    TARGET's hostname into the hop's dial. An unknown token resolves to
+    itself — which keeps every connector fixture keyed on the tokens it
+    already names."""
+
     def _run(argv, timeout):  # type: ignore[no-untyped-def]
-        return subprocess.CompletedProcess(argv, rc, stdout, "")
+        host = argv[-1]
+        if host == TARGET:
+            return subprocess.CompletedProcess(argv, rc, stdout, "")
+        return subprocess.CompletedProcess(argv, 0, _ssh_g(proxyjump=None, hostname=host), "")
 
     monkeypatch.setattr(rs, "_run_route_resolution", _run)
 
@@ -284,3 +295,48 @@ def test_failed_connect_through_a_jump_suspects_the_tunnel(
         TARGET, connect=_connector({HOP: True, TARGET: True}), activation="module load x && "
     )
     assert readiness.cause == "transport_flap"
+
+
+class TestHopAliasResolution:
+    """The 2026-07-30 first-live-day defect: a ProxyJump written as an ssh
+    ALIAS (``usc-discovery``) has no DNS record, and the raw TCP dial on the
+    token reported a HEALTHY hop as down. The dial must go to the alias-
+    resolved HostName; the atom's identity stays the configured token."""
+
+    def test_hop_alias_is_resolved_before_the_dial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from hpc_agent.infra import readiness_sensors as rs
+
+        monkeypatch.setattr(
+            rs,
+            "resolve_route",
+            lambda token, **_k: rs.RouteChain(
+                host=token,
+                hostname="discovery2.usc.edu" if token == "usc-discovery" else token,
+                resolved=True,
+            ),
+        )
+        dialed: list[str] = []
+
+        def fake_connect(host: str, port: int, timeout: float) -> tuple[bool, str]:
+            dialed.append(host)
+            # The REAL hostname answers; the raw alias would fail resolution.
+            return (host == "discovery2.usc.edu", "connect probe")
+
+        atom = rs.sense_leg("usc-discovery", kind="hop", connect=fake_connect)
+        assert dialed == ["discovery2.usc.edu"]
+        assert atom.verdict == "ok"
+        assert atom.target == "usc-discovery"  # identity stays the token
+        assert "alias usc-discovery -> discovery2.usc.edu" in (atom.detail or "")
+
+    def test_resolution_failure_falls_back_to_the_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hpc_agent.infra import readiness_sensors as rs
+
+        def boom(token: str, **_k: object) -> object:
+            raise OSError("ssh -G unavailable")
+
+        monkeypatch.setattr(rs, "resolve_route", boom)
+        atom = rs.sense_leg("10.0.0.7", kind="hop", connect=lambda h, p, t: (True, "connect probe"))
+        assert atom.verdict == "ok"
+        assert atom.target == "10.0.0.7"

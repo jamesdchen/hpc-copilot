@@ -424,6 +424,25 @@ def tcp_connect(
         return False, f"{type(exc).__name__}: {exc}"[:200]
 
 
+def _leg_dial_hostname(token: str) -> str:
+    """The DIALABLE hostname for a chain-element *token* — never the raw alias.
+
+    ``ssh -G`` reports a ProxyJump as the LITERAL config token (``usc-discovery``),
+    which is an ssh ALIAS with no DNS record; a raw TCP dial on it fails name
+    resolution and reported a HEALTHY hop as ``down`` on the sensor's first live
+    day (2026-07-30 — caught by the operator asking "are you sure it's down?").
+    One more ``ssh -G`` pass resolves the alias to its ``HostName`` exactly the
+    way ssh itself would; a token that IS a real hostname resolves to itself, and
+    any resolution failure falls back to the token (fail-open — the dial then
+    reports the same failure it always did, honestly).
+    """
+    try:
+        resolved = resolve_route(token).final_hostname
+    except Exception:  # noqa: BLE001 — resolution is an assist, never a gate
+        return token
+    return resolved or token
+
+
 def sense_leg(
     host: str,
     *,
@@ -437,12 +456,18 @@ def sense_leg(
     *connect* is injected so the composer's own bounded connector (and its test
     fake) is what runs; it defaults to :func:`tcp_connect`. The latency is
     measured around the dial so the ledger can rank "slow but up" against "down"
-    without a second probe.
+    without a second probe. The atom's IDENTITY stays the chain token *host*
+    (the configured name is what the human recognizes); the DIAL goes to the
+    alias-resolved hostname (:func:`_leg_dial_hostname`), disclosed in the
+    detail whenever the two differ.
     """
     dial = connect or tcp_connect
+    dial_host = _leg_dial_hostname(host)
     started = time.perf_counter()
-    ok, detail = dial(host, port, timeout_sec)
+    ok, detail = dial(dial_host, port, timeout_sec)
     latency = (time.perf_counter() - started) * 1000.0
+    if dial_host != host:
+        detail = f"{detail} (alias {host} -> {dial_host})"
     verdict: SensorVerdict = "ok" if ok else ("timeout" if "timeout" in detail.lower() else "down")
     return _atom(kind, host, verdict, detail, latency_ms=latency)
 
