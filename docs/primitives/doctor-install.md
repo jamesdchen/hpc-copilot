@@ -56,23 +56,43 @@ whole definition is one readable artifact under the journal home
 
 ## Lifecycle
 
-A finished run must never leave a headless tick behind — the same rule
-`decide-monitor-arm`'s `arm="none"` binds for the harness cron, applied to the
-OS-scheduler arm. `hpc_agent.infra.local_scheduler.remove_watchdog_if_idle` is
-the ONE definition and it is wired at the **guaranteed terminal harvest**
-(`harvest_on_terminal`), which every terminal path passes through: the monitor
-poll loop's terminal branches and its abnormal-exit `finally`, the reconcile
-settle arm, and `settle-run`.
+A finished run must never leave a headless tick behind — the same principle
+`decide-monitor-arm`'s `arm="none"` applies to the harness cron, applied here to
+the OS-scheduler arm. `hpc_agent.infra.local_scheduler.remove_watchdog_if_idle`
+is the ONE definition and it is wired at the **guaranteed terminal harvest**
+(`harvest_on_terminal`) — the terminal with the broadest reach: the monitor poll
+loop's terminal branches and its abnormal-exit `finally`, the reconcile settle
+arm, and `settle-run`.
+
+It is **not** every terminal. These paths mark a run terminal *without*
+harvesting, by design, so the teardown never fires for them:
+
+- `ops/monitor/reconcile_stale._close_record` (bulk stale closure),
+- `ops/monitor/reconcile._never_actuated_abandon`,
+- `ops/monitor/reconcile._safe_resubmit`,
+- `ops/supersession` (`abandoned` is a terminal status).
+
+[`doctor`](doctor.md)'s stale-watchdog sweep is the **backstop** for exactly
+those, and for the tasks no terminal will ever fire for at all (installed by an
+older build, or orphaned when a journal namespace was deleted). It alerts with
+the exact removal command; it never removes anything itself.
 
 Because this task is namespaced per **repo**, not per run, the teardown
 predicate is *"no live run remains in this experiment's journal namespace"* —
 not *"this run finished"*. Removing it while a sibling run is still in flight
 would blind the dead-man's switch for the run that still needs it.
 
-Tasks that no terminal will ever fire for (installed by an older build, or
-orphaned when a journal namespace was deleted) are caught by
-[`doctor`](doctor.md)'s stale-watchdog probe, which alerts with the exact
-removal command.
+### Marker-gated scheduler calls
+
+`schtasks /Query` measured **24.6 s cold**, and the terminal teardown runs on
+every finished run. Both the teardown and the sweep therefore check a **local
+install marker** first — a pure filesystem probe for the durable
+`doctor.spec.json` / `doctor.task.xml` this verb writes under the journal
+namespace. No marker → no subprocess at all. Only when a watchdog really was
+installed is the scheduler queried, under a budget
+(`local_scheduler.SCHTASKS_TIMEOUT_SEC`) sized *above* the measured cold cost,
+because a sweep that times out after paying its budget reports "nothing found"
+and is indistinguishable from success.
 
 ## Inputs
 

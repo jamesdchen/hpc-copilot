@@ -12,8 +12,17 @@ This is the deterministic verb an OS-scheduled task (Task Scheduler / cron) runs
 out-of-session; the watch-the-watcher recursion bottoms out at the OS scheduler.
 
 Pure local filesystem read — the per-run journal records under
-``~/.claude/hpc/<repo>/``. No SSH, no scheduler. The only subprocess is the
-version-skew check's bounded (2 s timeout, fail-open) local ``git rev-parse``.
+``~/.claude/hpc/<repo>/``. No SSH, and no scheduler MUTATION ever. Exactly two
+bounded local subprocesses can run, both fail-open:
+
+* the version-skew check's ``git rev-parse`` (2 s timeout);
+* the stale-watchdog sweep's ``schtasks /Query`` / ``crontab -l``
+  (:data:`hpc_agent.infra.local_scheduler.SCHTASKS_TIMEOUT_SEC`, 40 s — sized
+  above the ~25 s cold cost of Task Scheduler's first call). This one is
+  **marker-gated**: it is skipped entirely unless a journal namespace on this
+  machine carries a watchdog install marker, so a machine that never ran
+  ``doctor-install`` pays zero subprocess for it. It is a QUERY — the sweep
+  reports stale tasks with a removal command and never removes one itself.
 """
 
 from __future__ import annotations
@@ -637,10 +646,12 @@ def _transport_drift_routing(now: str) -> list[AlertRecord]:
         help=(
             "Driver watchdog (dead-man's switch). Scan live runs for a missed "
             "driver-tick deadline and surface each as a DRAFTED recovery proposal "
-            "plus the evidence. Read-only, no SSH, no scheduler. It NEVER restarts "
-            "or re-arms anything — detection is its whole job; safe recovery is "
-            "guaranteed by tick idempotency. Run it out-of-session from an OS "
-            "scheduler (Task Scheduler / cron)."
+            "plus the evidence. Read-only and no SSH; it never MUTATES a "
+            "scheduler, and its marker-gated stale-watchdog sweep only QUERIES "
+            "one (skipped entirely when no watchdog is installed on this "
+            "machine). It NEVER restarts or re-arms anything — detection is its "
+            "whole job; safe recovery is guaranteed by tick idempotency. Run it "
+            "out-of-session from an OS scheduler (Task Scheduler / cron)."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
@@ -680,6 +691,16 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     build sha differs from the HEAD of the hpc-agent *source repo* that
     *experiment_dir* belongs to (stale install — reinstall). Fail-open: no
     git, no embedded sha, or not that repo → the field is simply null.
+
+    SUBPROCESS BUDGET (the scan is otherwise a pure local filesystem read): two
+    bounded, fail-open local commands, never SSH and never a scheduler mutation
+    — ``git rev-parse`` for the skew check (2 s), and the stale-watchdog sweep's
+    ``schtasks /Query`` / ``crontab -l`` (40 s, sized above Task Scheduler's
+    ~25 s cold first call). The sweep is MARKER-GATED: unless some journal
+    namespace on this machine carries a watchdog install marker it is skipped
+    without spawning anything, so the common case costs nothing. It only
+    QUERIES — stale tasks are reported on ``alerts`` with a composed removal
+    command the human runs.
 
     Raises :class:`errors.SpecInvalid` if *spec.now* is a non-ISO-8601 string.
     """

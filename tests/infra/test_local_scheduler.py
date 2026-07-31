@@ -81,7 +81,10 @@ class _FakeCrontab:
         self.calls.append((argv, input_text))
         if argv == ["crontab", "-l"]:
             if self.content is None:
-                return _cp(argv, rc=1)
+                # Real vixie-cron/cronie phrasing for "this user has no table".
+                # rc!=0 with NO output is now deliberately read as UNREADABLE,
+                # so the fake must emit what the real binary emits.
+                return _cp(argv, rc=1, stdout="no crontab for james")
             return _cp(argv, rc=0, stdout=self.content)
         if argv == ["crontab", "-"]:
             self.content = input_text
@@ -303,6 +306,73 @@ def test_posix_install_refuses_to_write_when_the_table_is_unreadable(
     assert ["crontab", "-"] not in calls
 
 
+def test_posix_silent_nonzero_crontab_read_also_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-zero `crontab -l` with NO output must refuse too (L3).
+
+    The dangerous case is the quiet one: a permission denial or a broken
+    installation can exit non-zero without printing anything a captured pipe
+    sees, and "no output" was previously read as "empty table" — i.e. write. The
+    branch is allow-listed now: only a POSITIVELY recognized empty-table message
+    permits the write.
+    """
+    calls: list[list[str]] = []
+
+    def _silent(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
+        calls.append(argv)
+        if argv == ["crontab", "-l"]:
+            return _cp(argv, rc=1, stdout="")
+        raise AssertionError("the write path must not be reached")
+
+    monkeypatch.setattr(ls, "platform_kind", lambda: "posix")
+    monkeypatch.setattr(ls, "_run", _silent)
+
+    readable, lines = ls.cron_read()
+    assert (readable, lines) == (False, [])
+    with pytest.raises(RuntimeError, match="refusing to write"):
+        ls.install_task(
+            task_name="hpc-agent-doctor-abc123abc123",
+            namespace=tmp_path,
+            command="/usr/bin/python3",
+            arguments="-m hpc_agent doctor",
+            working_dir="/exp",
+            interval_minutes=15,
+            description="d",
+            cron_command="/usr/bin/python3 -m hpc_agent doctor",
+        )
+    assert ["crontab", "-"] not in calls
+
+
+def test_posix_rewrite_preserves_blank_lines_and_comments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Installing a watchdog must not reformat the operator's crontab (L4).
+
+    The table is rebuilt from the lines we read back, so dropping "empty" lines
+    on read silently strips every blank separator and leaves the user's file
+    visibly rearranged by an unrelated action.
+    """
+    original = "# nightly backups\n\n0 3 * * * /usr/bin/backup\n\n# end\n"
+    fake = _FakeCrontab(original)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "posix")
+    monkeypatch.setattr(ls, "_run", fake)
+
+    ls.install_task(
+        task_name="hpc-agent-doctor-abc123abc123",
+        namespace=tmp_path,
+        command="/usr/bin/python3",
+        arguments="-m hpc_agent doctor",
+        working_dir="/exp",
+        interval_minutes=15,
+        description="d",
+        cron_command="/usr/bin/python3 -m hpc_agent doctor",
+    )
+    body = fake.content or ""
+    assert body.startswith(original.rstrip("\n"))
+    assert "\n\n0 3 * * * /usr/bin/backup\n\n# end\n" in body
+
+
 def test_posix_empty_table_still_installs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The recognized "no crontab for <user>" empty table is NOT a read failure.
 
@@ -334,6 +404,16 @@ def test_posix_empty_table_still_installs(tmp_path: Path, monkeypatch: pytest.Mo
     assert written and "hpc-agent-doctor-abc123abc123" in (written[0] or "")
 
 
+def _mark_installed(namespace: Path) -> None:
+    """Leave the durable install marker the scheduler gate keys on.
+
+    Both the sweep and the teardown skip the scheduler entirely when no marker
+    exists, so a test that wants to exercise the scheduler path must look like a
+    namespace where `doctor-install` really ran.
+    """
+    (Path(namespace) / "doctor.spec.json").write_text('{"notify": true}', encoding="utf-8")
+
+
 def _write_run(namespace: Path, run_id: str, status: str) -> None:
     runs = namespace / "runs"
     runs.mkdir(parents=True, exist_ok=True)
@@ -352,6 +432,7 @@ def test_remove_watchdog_if_idle_holds_while_a_run_is_live(
     exp.mkdir()
     namespace = journal_dir(exp)
     task = ls.task_name_for(repo_hash(exp))
+    _mark_installed(namespace)
     _write_run(namespace, "done", "complete")
     _write_run(namespace, "still-going", "in_flight")
 
@@ -395,8 +476,12 @@ def test_remove_watchdog_if_idle_never_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """It is called from a terminal path: a broken scheduler must not mask the cause."""
+    from hpc_agent.state.run_record import journal_dir
+
     exp = tmp_path / "exp"
     exp.mkdir()
+    _mark_installed(journal_dir(exp))
+    _write_run(journal_dir(exp), "a", "complete")
 
     def _boom(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
         raise OSError("scheduler exploded")
@@ -410,6 +495,86 @@ def test_remove_watchdog_if_idle_never_raises(
     assert record["status"] in {"not_installed", "error"}
 
 
+# --------------------------------------------------------------------------- #
+# The MARKER GATE — what keeps `schtasks` off the common path
+# --------------------------------------------------------------------------- #
+def test_teardown_spawns_nothing_when_no_watchdog_was_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The B1/H2 gate: no install marker → no subprocess, at all.
+
+    `schtasks /Query` cost 24.6 s cold on the incident machine, and the terminal
+    harvest calls this on EVERY finished run — the overwhelming majority of which
+    belong to experiments that never installed a watchdog. The proof is negative
+    and must stay negative: the seam is replaced with a fake that FAILS the test
+    if it is called at all.
+    """
+    from hpc_agent.state.run_record import journal_dir
+
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    journal_dir(exp)  # a real journal namespace — but no install marker in it
+    _write_run(journal_dir(exp), "a", "complete")
+
+    def _must_not_spawn(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
+        raise AssertionError(f"no subprocess may be spawned without a marker: {argv}")
+
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", _must_not_spawn)
+
+    record = ls.remove_watchdog_if_idle(exp)
+    assert record["removed"] is False
+    assert record["status"] == "not_installed"
+    assert "marker" in record["reason"]
+
+
+def test_sweep_spawns_nothing_when_no_watchdog_was_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same gate on the doctor sweep — the readiness-style no-spawn proof."""
+
+    def _must_not_spawn(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
+        raise AssertionError(f"no subprocess may be spawned without a marker: {argv}")
+
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", _must_not_spawn)
+    assert ls.watchdog_marker_hashes() == []
+    assert ls.scan_stale_watchdogs() == []
+
+
+def test_marker_gate_opens_on_either_durable_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both eras count: the CURRENT installer's XML and the OLD build's bare spec.
+
+    Gating on the task XML alone would make the sweep blind to exactly the tasks
+    it exists to find — the pre-fix build wrote only `doctor.spec.json`.
+    """
+    from hpc_agent.state.run_record import current_homedir
+
+    home = current_homedir()
+    (home / "aaaaaaaaaaaa").mkdir(parents=True)
+    (home / "bbbbbbbbbbbb").mkdir(parents=True)
+    (home / "cccccccccccc").mkdir(parents=True)  # no marker at all
+    (home / "aaaaaaaaaaaa" / "doctor.spec.json").write_text("{}", encoding="utf-8")
+    ls.write_task_xml(home / "bbbbbbbbbbbb", "<Task/>")
+
+    assert ls.watchdog_marker_hashes() == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+    assert ls.namespace_has_marker(home / "cccccccccccc") is False
+
+
+def test_schtasks_budget_exceeds_the_measured_cold_cost() -> None:
+    """A timeout below the cold cost is a silent-failure generator, not a budget.
+
+    Measured 24.6 s for a cold `schtasks /Query` on the incident machine. At the
+    original 15 s the sweep would pay the full budget and then time out having
+    learned nothing — which is indistinguishable, in the envelope, from "no stale
+    watchdogs found". Pinned so a future latency tidy-up cannot quietly restore
+    the silent failure.
+    """
+    assert ls.SCHTASKS_TIMEOUT_SEC > 24.6
+
+
 def test_remove_watchdog_if_idle_reports_a_refusing_scheduler(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -419,6 +584,7 @@ def test_remove_watchdog_if_idle_reports_a_refusing_scheduler(
     exp = tmp_path / "exp"
     exp.mkdir()
     task = ls.task_name_for(repo_hash(exp))
+    _mark_installed(journal_dir(exp))
     _write_run(journal_dir(exp), "a", "complete")
 
     def _refuse(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
@@ -449,6 +615,11 @@ def _seed_namespace(tmp_path: Path, name: str, *, statuses: list[str], spec: boo
     (tmp_path / name).mkdir(exist_ok=True)
     if spec:
         (namespace / "doctor.spec.json").write_text('{"notify": true}', encoding="utf-8")
+    else:
+        # spec_missing signature: the task XML marker still proves an install
+        # happened here, so the sweep's machine-wide gate opens and the missing
+        # spec is REPORTED rather than silently skipped.
+        ls.write_task_xml(namespace, "<Task/>")
     for i, status in enumerate(statuses):
         _write_run(namespace, f"r{i}", status)
     return namespace

@@ -92,7 +92,11 @@ class _FakeCrontab:
         self.calls.append((argv, input_text))
         if argv == ["crontab", "-l"]:
             if self.content is None:
-                return _cp(argv, rc=1)
+                # The real vixie-cron/cronie phrasing for "this user has no
+                # table". `cron_read` now ALLOW-LISTS that message rather than
+                # treating any non-zero exit as empty, so a fake that exits 1
+                # silently would (correctly) be refused as unreadable.
+                return _cp(argv, rc=1, stdout="no crontab for james")
             return _cp(argv, rc=0, stdout=self.content)
         if argv == ["crontab", "-"]:
             self.content = input_text

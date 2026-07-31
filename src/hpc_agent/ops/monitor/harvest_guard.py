@@ -315,15 +315,21 @@ def harvest_on_terminal(
     _write_marker(experiment_dir, run_id, marker)
 
     # (d) LOCAL WATCHDOG LIFECYCLE (2026-07-30): a finished run must never leave
-    #     a headless tick behind. This guard is the ONE seat every terminal path
-    #     passes through (the poll loop's terminal branches and its abnormal-exit
+    #     a headless tick behind. This guard is the terminal seat with the
+    #     BROADEST reach (the poll loop's terminal branches and its abnormal-exit
     #     ``finally``, the reconcile settle arm, ``settle-run``), so it is where
-    #     the out-of-session watchdog is torn down — the local-scheduler sibling
-    #     of the cron-lifecycle rule ``arm="none"`` already binds for the harness
-    #     cron. The watchdog is per-REPO, so the teardown fires only once NO live
-    #     run remains in this experiment's namespace (a sibling run still in
-    #     flight keeps the dead-man's switch armed); that check is a local journal
-    #     read, so the common path never spawns a scheduler process.
+    #     the out-of-session watchdog is torn down. It is NOT every terminal:
+    #     the bulk / never-actuated closure paths (``reconcile_stale.
+    #     _close_record``, ``reconcile._never_actuated_abandon``, ``reconcile.
+    #     _safe_resubmit``, ``ops/supersession``) mark runs terminal without
+    #     harvesting, by design — those are covered by ``doctor``'s
+    #     stale-watchdog sweep, which finds a task whose namespace has gone
+    #     all-terminal however it got there.
+    #     The watchdog is per-REPO, so the teardown fires only once NO live run
+    #     remains in this experiment's namespace (a sibling run still in flight
+    #     keeps the dead-man's switch armed). Two local gates run first — the
+    #     install marker, then the live-run count — so a run in an experiment
+    #     that never installed a watchdog spawns no scheduler process at all.
     #     Never raises — like every other step here it must not mask the terminal
     #     cause it may be running under.
     _remove_local_watchdog_if_idle(experiment_dir)

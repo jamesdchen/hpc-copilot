@@ -23,15 +23,35 @@ every run they were installed for had finished.
    ``schtasks /Create /TR`` cannot express ``Hidden`` at all — which is exactly
    why the original install was visible — so the XML form is the only form.
 
-2. **LIFECYCLE.** :func:`remove_task` is reachable from every terminal, and
-   :func:`install_task` is idempotent by REPLACEMENT (``/Create /F /XML``), never
-   by "already there, leave it": a task registered by an older build (visible
-   window, wrong cadence) must HEAL on re-install, not survive forever behind an
-   existence check.
+2. **LIFECYCLE.** :func:`remove_watchdog_if_idle` is wired at the guaranteed
+   terminal harvest, and :func:`install_task` is idempotent by REPLACEMENT
+   (``/Create /F /XML``), never by "already there, leave it": a task registered
+   by an older build (visible window, wrong cadence) must HEAL on re-install,
+   not survive forever behind an existence check. The harvest is not the ONLY
+   terminal — the bulk/never-actuated closure paths
+   (``reconcile_stale._close_record``, ``reconcile._never_actuated_abandon``,
+   ``reconcile._safe_resubmit``, ``ops/supersession``) mark a run terminal
+   WITHOUT harvesting, and deliberately so. Those are covered by
+   :func:`scan_stale_watchdogs`, the ``doctor`` backstop that finds any task
+   whose namespace has gone all-terminal however it got there.
 
 3. **NO REAL SCHEDULER IN TESTS.** Every scheduler process spawn goes through the
    single :func:`_run` seam, so tests inject a fake ``schtasks``/``crontab``
    instead of mutating the CI machine's real task list.
+
+**Marker-gated spawns.** ``schtasks`` is expensive — a cold ``/Query`` measured
+**24.6 s** on the incident machine — and both the staleness sweep and the
+terminal teardown would otherwise pay it on every call, including the
+overwhelmingly common case where this machine has never installed a watchdog at
+all. Both are therefore gated on a LOCAL MARKER first
+(:func:`watchdog_marker_hashes` / :func:`namespace_has_marker`): a pure
+filesystem probe for the durable ``doctor.spec.json`` / ``doctor.task.xml`` the
+installer writes under the journal namespace. No marker anywhere → **zero
+subprocess**, so a ``doctor`` run on a watchdog-free machine (and every test that
+never installed one) never spawns a scheduler process. The marker gate is also
+what makes the timeout honest: :data:`SCHTASKS_TIMEOUT_SEC` is sized ABOVE the
+measured cold cost rather than below it, because a sweep that silently times out
+after paying 15 s is worse than either honest choice.
 
 POSIX is an honest no-op for the window legs: a ``crontab`` line has no console
 to hide and no windowless interpreter to pick, so :func:`windowless_interpreter`
@@ -54,10 +74,12 @@ __all__ = [
     "TASK_NAME_PREFIX",
     "compose_removal_command",
     "cron_lines",
+    "cron_read",
     "install_task",
     "installed_task_names",
     "live_run_count",
     "namespace_for_task",
+    "namespace_has_marker",
     "remove_task",
     "remove_watchdog_if_idle",
     "scan_stale_watchdogs",
@@ -65,11 +87,19 @@ __all__ = [
     "task_name_for",
     "task_xml",
     "task_xml_path",
+    "watchdog_marker_hashes",
     "windowless_interpreter",
     "write_task_xml",
 ]
 
-SCHTASKS_TIMEOUT_SEC = 15
+#: Sized ABOVE the measured cold cost of ``schtasks /Query`` on the incident
+#: machine (**24.6 s** — the Task Scheduler service's first-call warm-up), not
+#: below it. The previous 15 s budget was a silent-failure generator: the sweep
+#: would pay the full 15 s and then time out having learned nothing, which reads
+#: identically to "no stale watchdogs". Spawns are marker-gated (see the module
+#: docstring), so this budget is only ever paid on a machine that actually has a
+#: watchdog installed.
+SCHTASKS_TIMEOUT_SEC = 40
 CRONTAB_TIMEOUT_SEC = 15
 
 #: Every local watchdog task/cron marker this framework registers starts here,
@@ -116,6 +146,46 @@ def _run(
 def task_name_for(repo_hash_value: str) -> str:
     """The stable watchdog task name / cron marker for a journal repo hash."""
     return f"{_DOCTOR_PREFIX}{repo_hash_value}"
+
+
+# --------------------------------------------------------------------------- #
+# Local markers — the gate that keeps `schtasks` off the common path
+# --------------------------------------------------------------------------- #
+#: The durable files a watchdog install leaves under its journal namespace. Both
+#: are checked because they cover different eras: the CURRENT installer writes
+#: the task XML, while a task registered by the pre-2026-07-30 build left only
+#: ``doctor.spec.json`` — and those are exactly the stale tasks the sweep exists
+#: to find, so gating on the XML alone would make the sweep blind to the very
+#: incident that motivated it.
+_MARKER_NAMES: tuple[str, ...] = ("doctor.spec.json", TASK_XML_NAME)
+
+
+def namespace_has_marker(namespace: Path) -> bool:
+    """Does this journal namespace carry a watchdog install marker? (pure FS read)"""
+    base = Path(namespace)
+    return any((base / name).is_file() for name in _MARKER_NAMES)
+
+
+def watchdog_marker_hashes() -> list[str]:
+    """Journal namespaces (repo-hash dir names) carrying a watchdog marker.
+
+    The cheap gate in front of every ``schtasks``/``crontab`` enumeration: a few
+    ``stat`` calls over the journal home instead of a subprocess that costs
+    ~25 s cold. An EMPTY result means this machine has never installed a
+    watchdog, so there is provably nothing for the sweep to find and the
+    scheduler is never invoked.
+
+    Note the gate is machine-wide, not per-namespace: once ANY namespace carries
+    a marker the full task list is enumerated, so a task whose own
+    ``doctor.spec.json`` was deleted (the ``spec_missing`` signature) is still
+    discovered. Fail-safe on an unreadable journal home: ``[]`` (no spawn), which
+    is the same answer a machine with no watchdogs gives.
+    """
+    try:
+        children = sorted(p for p in _journal_home().iterdir() if p.is_dir())
+    except OSError:
+        return []
+    return [p.name for p in children if namespace_has_marker(p)]
 
 
 # --------------------------------------------------------------------------- #
@@ -291,6 +361,14 @@ def _win_create_from_xml(task_name: str, xml_path: Path) -> subprocess.Completed
 # --------------------------------------------------------------------------- #
 # POSIX — crontab
 # --------------------------------------------------------------------------- #
+#: The ONLY non-zero ``crontab -l`` outputs that positively mean "this user has
+#: an EMPTY table" (vixie-cron / cronie / BSD phrasings). Everything else on a
+#: non-zero exit — a permission denial, an NIS/LDAP/NFS blip, or NO OUTPUT AT
+#: ALL — is treated as unreadable, because a read-modify-write that guesses
+#: "empty" destroys every entry the user has. See :func:`cron_read`.
+_EMPTY_TABLE_SIGNATURES: tuple[str, ...] = ("no crontab for", "no crontab set")
+
+
 def cron_read() -> tuple[bool, list[str]]:
     """``(readable, lines)`` — the FAIL-CLOSED crontab read the write paths use.
 
@@ -305,17 +383,37 @@ def cron_read() -> tuple[bool, list[str]]:
     line on EVERY call (idempotent-by-replacement), so the write path runs even
     when the table already carries our marker. ``readable=False`` means "do not
     write" — the caller leaves the table untouched.
+
+    The non-zero branch is **allow-listed, not deny-listed**: a non-zero exit is
+    treated as an empty table ONLY when the output positively matches a
+    recognized empty-table message. Anything else — including a SILENT non-zero
+    exit with no output at all — refuses. That direction is deliberate: a silent
+    ``crontab -l`` failure is indistinguishable from a permission denial
+    (``you (x) are not allowed to use this program`` is not guaranteed to be
+    printed to a captured pipe), and the cost of guessing wrong is destroying
+    every cron entry the user has. The cost of guessing conservatively is a LOUD
+    refusal naming the reason — including, on an exotic locale whose empty-table
+    message we do not recognize, a first install that refuses instead of
+    proceeding. Loud refusal beats silent destruction; the error text tells the
+    human exactly what to do.
+
+    Lines are returned VERBATIM — blanks and comments included — because the
+    caller rebuilds the table from them. Filtering "empty" lines here would
+    silently reformat the user's crontab as a side effect of installing a
+    watchdog (L4).
     """
     try:
         proc = _run(["crontab", "-l"], timeout=CRONTAB_TIMEOUT_SEC)
     except (OSError, subprocess.SubprocessError):
         return False, []
     if proc.returncode != 0:
-        blob = ((proc.stdout or "") + (proc.stderr or "")).strip()
-        if not blob or "no crontab for" in blob.lower():
-            return True, []  # empty table — safe to proceed
-        return False, []  # a genuine read failure — never clobber the table
-    return True, [ln for ln in proc.stdout.splitlines() if ln.strip()]
+        blob = ((proc.stdout or "") + " " + (proc.stderr or "")).strip().lower()
+        if any(sig in blob for sig in _EMPTY_TABLE_SIGNATURES):
+            return True, []  # positively recognized empty table — safe to proceed
+        return False, []  # unreadable, refused, or silent — never clobber the table
+    # rc == 0: the table was read successfully. An empty stdout here IS an empty
+    # (but existing) table, which is unambiguous and safe.
+    return True, proc.stdout.splitlines()
 
 
 def cron_lines() -> list[str]:
@@ -482,7 +580,7 @@ def remove_task(*, task_name: str, namespace: Path | None = None) -> str:
     return "uninstalled"
 
 
-def remove_watchdog_if_idle(experiment_dir: Path, *, force: bool = False) -> dict[str, Any]:
+def remove_watchdog_if_idle(experiment_dir: Path) -> dict[str, Any]:
     """THE terminal-seat teardown: remove this repo's watchdog once nothing is live.
 
     ONE definition, three callers: the guaranteed terminal harvest
@@ -493,26 +591,30 @@ def remove_watchdog_if_idle(experiment_dir: Path, *, force: bool = False) -> dic
     experiment idle?" locally (the drift that lets two seats disagree about when
     a watchdog may die).
 
-    The rule mirrors the cron-lifecycle rule ``arm="none"`` binds for the harness
-    cron — "a finished run must never leave a headless tick behind" — with one
-    adjustment forced by the shape of THIS watchdog: it is namespaced per REPO,
-    not per run, so its terminal is "no live run remains in this experiment's
-    journal namespace", never "this one run finished". Tearing it down while a
-    sibling run is still in flight would blind the dead-man's switch for the run
-    that still needs it.
+    This rule and the harness-cron ``arm="none"`` rule are two applications of
+    one principle ("a finished run must never leave a headless tick behind"), NOT
+    copies of one another — they share no code, no vocabulary, and no data, and
+    they deliberately differ where the watchdogs differ: the harness cron is
+    per-RUN, so it dies when its run ends, while this task is namespaced per
+    REPO, so its terminal is "no live run remains in this experiment's journal
+    namespace". Tearing it down on the per-run trigger would blind the
+    dead-man's switch for a sibling run still in flight, which is the failure the
+    watchdog exists to prevent. Nothing here needs to stay in sync with
+    ``decide_monitor_arm``; only the principle is shared.
 
     NEVER raises: it is called from a ``finally``-reachable terminal path, so a
     refused scheduler, an unreadable journal, or a host with no
-    ``schtasks``/``crontab`` is reported in the returned record instead. Cheap on
-    the common path: the live-run count is a local journal read and the scheduler
-    is only touched once the namespace is genuinely quiet.
+    ``schtasks``/``crontab`` is reported in the returned record instead.
 
-    *force* skips the live-run check (the human-directed removal path).
+    Two gates keep the common path free of a subprocess, in order: no install
+    MARKER under this namespace → nothing was ever scheduled here, return
+    immediately (this is what keeps the terminal harvest — and every test that
+    never installed a watchdog — from spawning a ~25 s ``schtasks`` query); then
+    the live-run count, a local journal read. The scheduler is touched only when
+    a watchdog really was installed AND the namespace is genuinely quiet.
 
     Returns ``{"removed", "status", "reason", "task_name", "live_runs"}``.
     """
-    from hpc_agent.state.run_record import journal_root_if_exists, repo_hash
-
     record: dict[str, Any] = {
         "removed": False,
         "status": "skipped",
@@ -521,12 +623,24 @@ def remove_watchdog_if_idle(experiment_dir: Path, *, force: bool = False) -> dic
         "live_runs": 0,
     }
     try:
+        # L1: imported INSIDE the try — this function's contract is "never
+        # raises", and an import is as capable of raising as anything below it.
+        from hpc_agent.state.run_record import journal_root_if_exists, repo_hash
+
         task_name = task_name_for(repo_hash(experiment_dir))
         record["task_name"] = task_name
         namespace = journal_root_if_exists(experiment_dir)
-        live = 0 if force else live_run_count(namespace)
+        if not namespace_has_marker(namespace):
+            record["status"] = "not_installed"
+            record["reason"] = (
+                "no watchdog install marker under this experiment's journal "
+                "namespace — nothing was ever scheduled here, so the scheduler is "
+                "not queried."
+            )
+            return record
+        live = live_run_count(namespace)
         record["live_runs"] = live
-        if live and not force:
+        if live:
             record["reason"] = (
                 f"{live} live run(s) remain in this experiment's journal namespace — "
                 "the watchdog still has something to watch."
@@ -554,6 +668,16 @@ def compose_removal_command(task_name: str, *, experiment_dir: str | None) -> st
     (it also tidies the durable spec + generated XML); falls back to the raw
     scheduler command when the dir is gone — which is precisely the case where
     the verb could not be pointed at it anyway.
+
+    QUOTING IS PER-SHELL and this string cannot satisfy every shell at once, so
+    it targets the shell each branch's tool actually lives in: the Windows
+    fallback uses ``"..."`` (cmd.exe / PowerShell both accept it), the POSIX
+    fallback uses ``'...'`` (sh/bash), and the verb form embeds a single-quoted
+    JSON spec — which is correct for sh/bash but NOT for cmd.exe, where the
+    operator must swap the outer quotes. It is a paste-ready HINT for a human,
+    never a string any code execs; nothing here shells out on the operator's
+    behalf, so a mis-quoted paste fails visibly at their prompt rather than
+    running something unintended.
     """
     if experiment_dir and Path(experiment_dir).exists():
         return (
@@ -645,6 +769,13 @@ def scan_stale_watchdogs() -> list[dict[str, Any]]:
     findings rather than a broken ``doctor`` scan.
     """
     findings: list[dict[str, Any]] = []
+    # MARKER GATE: no watchdog was ever installed on this machine → provably
+    # nothing to sweep, and we skip the ~25 s cold `schtasks /Query` entirely.
+    # This is what keeps `doctor` free of a scheduler subprocess on the common
+    # path (and what keeps every test that never installed a watchdog from
+    # spawning one).
+    if not watchdog_marker_hashes():
+        return []
     try:
         names = installed_task_names()
     except Exception:  # noqa: BLE001 — a probe must never break the doctor scan
