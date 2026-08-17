@@ -515,6 +515,76 @@ def _disclosures_ledger(
     return ledger
 
 
+def _adoption_disclosures(experiment_dir: Path, run_ids: list[str]) -> list[dict[str, Any]]:
+    """Disclosure entries for ADOPTED (unobserved) runs in the sealed run set.
+
+    A run adopted post-hoc via ``adopt-run``
+    (``docs/design/post-exploration-checker.md``) was never observed by the tool:
+    the fingerprint ledger is observed-runs-only, and submission-time env/data
+    manifests exist only if the adopter supplied them. This makes each missing
+    axis an EXPLICIT ``not captured (unobserved run)`` ledger entry rather than
+    an absent key — the adoption analogue of the dossier's present-or-gap
+    accounting. Detection reuses the ONE public seam
+    (:func:`hpc_agent.ops.cite_check.adopted_run_ids` — sidecar ``extra.adopted``
+    pocket, falling through to the ``block == "adopt-run"`` journal record).
+
+    DISCLOSURE ONLY: no link status, no verdict, and no computed number moves.
+    An observed run carries no adoption marker, so this returns ``[]`` and every
+    bundle over observed runs stays byte-identical to before (the regression
+    pin in ``tests/ops/test_publication_bundle_adopted.py``).
+    """
+    from hpc_agent.ops.cite_check import adopted_run_ids
+    from hpc_agent.state.runs import read_run_sidecar_or_empty
+
+    entries: list[dict[str, Any]] = []
+    for rid in adopted_run_ids(experiment_dir, list(run_ids)):
+        entries.append(
+            {
+                "origin": "adoption",
+                "code": "unobserved-run",
+                "run_id": rid,
+                "detail": (
+                    f"run {rid!r} was adopted post-hoc (adopt-run) — never observed by "
+                    "the tool. Its adoption decision-journal records, claim-check "
+                    "receipts, and reducer output are sealed inside dossier-evidence "
+                    "when present."
+                ),
+            }
+        )
+        entries.append(
+            {
+                "origin": "adoption",
+                "code": "fingerprint-not-captured",
+                "run_id": rid,
+                "detail": (
+                    f"determinism fingerprint for run {rid!r}: not captured (unobserved "
+                    "run) — the fingerprint ledger is observed-runs-only and adoption "
+                    "mints no samples."
+                ),
+            }
+        )
+        sidecar = read_run_sidecar_or_empty(experiment_dir, rid)
+        missing_axes = [
+            axis
+            for axis, key in (("data", "data_sha"), ("environment-lock", "env_lock_sha"))
+            if not sidecar.get(key)
+        ]
+        if missing_axes:
+            entries.append(
+                {
+                    "origin": "adoption",
+                    "code": "manifest-not-captured",
+                    "run_id": rid,
+                    "detail": (
+                        f"{' + '.join(missing_axes)} manifest(s) for run {rid!r}: not "
+                        "captured (unobserved run) — not supplied at adoption; the "
+                        "corresponding link(s) stay DISCLOSED, never MECHANICAL."
+                    ),
+                }
+            )
+    return entries
+
+
 def _bundle_verdict(links: list[dict[str, Any]]) -> str:
     """The CODE-emitted honest verdict (R-B4) — a fixed template + the classification.
 
@@ -651,6 +721,11 @@ def export_bundle(*, experiment_dir: Path, spec: ExportBundleSpec) -> ExportBund
         manuscript_present=manuscript_present,
         campaign_id=campaign_id,
     )
+    # Adopted (unobserved) runs in the sealed set: each missing evidence axis
+    # becomes an explicit "not captured (unobserved run)" ledger entry —
+    # disclosure only, no link/verdict/number change. Empty for observed runs,
+    # so an observed-run bundle stays byte-identical.
+    disclosures.extend(_adoption_disclosures(experiment_dir, sig.run_ids))
     verdict = _bundle_verdict(links)
 
     # 5. Seal every member under one write_map + entries. Dossier stores ride under

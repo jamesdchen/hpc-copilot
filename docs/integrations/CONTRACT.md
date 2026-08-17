@@ -94,6 +94,45 @@ One extra primitive is useful but not required for the basic loop:
 
 - **`hpc-agent clusters list`** — discoverable cluster catalog.
 
+## Workflow: adopt → aggregate → claim-check → attest (the post-exploration checker)
+
+The first-class flow for a run that ALREADY HAPPENED — submitted by any means
+(including none of hpc-agent's), observed by nothing. The checker verifies the
+fidelity of its results after the fact: it adopts the run, aggregates in code,
+claim-checks against human-claimed numbers, and attests. It never re-runs the
+exploration and never fetches what wasn't manifested. Design doctrine:
+[`../design/post-exploration-checker.md`](../design/post-exploration-checker.md);
+the harness-neutral conformance walkthrough lives in
+[`../generated/harness-runbook.md`](../generated/harness-runbook.md).
+
+1. **`hpc-agent adopt-run --spec <path>`** — mint the run record from what
+   actually exists. Adoption facts are ELICITED from the caller or from
+   observed scheduler state (never invented); the `cmd_sha` is DERIVED from
+   the exact command the run executed (never free-typed).
+2. **`hpc-agent aggregate-check --spec <path>`** — readiness + integrity gate
+   over the adopted run.
+3. **`hpc-agent aggregate-run --spec <path>`** — deterministic combine +
+   reduce. Every aggregate number is reducer-computed; the driving agent
+   computes none of them. `aggregate-run` carries its greenlight gate inside
+   the verb body — a call the run's journal does not greenlight is refused
+   with a self-remediating message; commit the greenlight through
+   `append-decision`.
+4. **`hpc-agent verify-reproduction --spec <path>`** with an
+   `external_baseline` block — claim-check the reduced numbers against
+   human-authored `claimed_values` under a caller tolerance. The receipt kind
+   is `claim-check` — NEVER `reproduction`; the verdict sentence is
+   code-rendered — relay it verbatim, do not characterise match or mismatch.
+5. **`hpc-agent evidence-brief --spec <path>`** — project the run's durable
+   records into the evidence digest the human attests against.
+6. **`hpc-agent verify-relay --spec <path>`** — the closing audit: every
+   figure the driving agent relayed is audited against the run's own corpus.
+   Model-carried text is worth nothing to the gates; the relay audit is what
+   makes the summary itself checked.
+
+The submit → monitor → aggregate → verify flow above REMAINS, demoted to the
+opt-in observation instrument for runs driven under hpc-agent from the start.
+The two flows share the envelope, the error table, and the journal.
+
 ## `error_code` → retry policy
 
 Source of truth: `src/hpc_agent/errors.py`. Full list also in

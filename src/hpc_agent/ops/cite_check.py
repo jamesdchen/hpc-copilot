@@ -37,6 +37,20 @@ operator/reviewer projection, and the curated catalog is a deliberate
 human-amplification allowlist (the MCP-is-projection ruling), so it is reachable
 via the CLI registry but kept OUT of ``mcp_server._CURATED_EXTRA_VERBS``.
 
+Adopted (unobserved) runs (``docs/design/post-exploration-checker.md`` §3): a run
+adopted post-hoc via the checker front door was never observed by the tool — the
+determinism-fingerprint ledger is observed-runs-only, so an adopted run has no
+fingerprint envelope. cite-check never CONSUMES that evidence (its citing
+authority is the sealed table alone), so nothing crashes and no verdict moves;
+but when an audited run reads as adopted — the sidecar ``extra.adopted`` pocket
+stamped by ``adopt-run`` at intake, falling through to the terminal-settle
+``block == "adopt-run"`` journal record (the ``ops.recover.doctor``
+``_is_adopted_run`` two-key check, mirrored) — the rendered ``markdown`` gains a
+"Provenance disclosures — adopted runs" section stating the gap plainly and
+naming what the audit DOES cover (the sealed values, claim-check receipts,
+decision journals). An observed run carries no marker, so its report is
+byte-identical to before this disclosure existed.
+
 This file lives at the ``ops/`` *role root* (sibling to ``extract_recipe.py`` /
 ``trace.py`` / ``run_story.py``) because it reads across subjects — the sealed
 aggregate (aggregate subject), the ``extract_recipe`` seed resolver (``ops`` root),
@@ -57,7 +71,7 @@ from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.cite_check import CiteCheckInput, CiteCheckResult, CiteFinding
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
-__all__ = ["cite_check"]
+__all__ = ["cite_check", "adopted_run_ids"]
 
 
 # ── manuscript-specific reference exclusions (NEW — the false-positive soul) ────
@@ -115,6 +129,95 @@ _CITATION_RE = re.compile(
 # NOT a bib marker (the ``\d+`` runs stop at the ``.``), so it is left for the
 # number pass.
 _BIB_MARKER_RE = re.compile(r"\[\s*\d+(?:\s*[-,–]\s*\d+)*\s*\]")
+
+# ── the adopted-run (unobserved) provenance disclosure ─────────────────────────
+# The ONE sentence the audit states per adopted run (pinned verbatim by
+# ``tests/ops/test_cite_check.py``; reused by ``ops/publication_bundle.py`` so the
+# manuscript-time checkers speak with one voice): an adopted run has no
+# determinism evidence to consume, and the audit SAYS so while continuing over
+# what IS sealed.
+_ADOPTED_DISCLOSURE = (
+    "no fingerprint envelope — run was adopted post-hoc, never observed by the tool"
+)
+
+# The decision-journal ``block`` the ``adopt-run`` terminal directed-settle
+# branch stamps on the run's journal (the checker front door,
+# ``docs/design/post-exploration-checker.md``). The SECOND adoption key —
+# the first is the sidecar's ``extra.adopted`` pocket, stamped UNCONDITIONALLY
+# at intake (an adopted run still in flight carries only the pocket).
+_ADOPT_BLOCK = "adopt-run"
+
+
+def _is_adopted_run(experiment_dir: Path, run_id: str) -> bool:
+    """True when *run_id* was ADOPTED post-hoc (an unobserved run).
+
+    The same two-key check ``ops.recover.doctor._is_adopted_run`` applies
+    (mirrored, not shared — doctor is a recovery subject this role-root op
+    does not import): the sidecar's ``extra.adopted`` pocket first (written
+    unconditionally by ``adopt-run`` at intake — never a top-level sidecar
+    key, which ``write_run_sidecar`` would not persist), falling through to a
+    decision-journal record with ``block == "adopt-run"`` (the terminal
+    directed-settle sign-off) for a run whose sidecar was pruned or torn.
+    Fail-open to NOT adopted: an unreadable store reads as the observed
+    default, keeping every observed-run output byte-identical.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.runs import read_run_sidecar_or_empty
+
+    extra = read_run_sidecar_or_empty(experiment_dir, run_id).get("extra")
+    if isinstance(extra, dict) and extra.get("adopted"):
+        return True
+    try:
+        return any(
+            rec.get("block") == _ADOPT_BLOCK
+            for rec in read_decisions(experiment_dir, "run", run_id)
+        )
+    except errors.SpecInvalid:
+        return False  # a non-filesystem-safe id cannot carry a journal
+
+
+def adopted_run_ids(experiment_dir: Path, run_ids: list[str]) -> list[str]:
+    """The subset of *run_ids* that were ADOPTED post-hoc (unobserved runs).
+
+    Order-preserving, de-duplicated, tolerant (:func:`_is_adopted_run` never
+    raises on a torn store). An OBSERVED run carries neither adoption key, so
+    this returns ``[]`` and every disclosure keyed on it stays byte-absent —
+    the observed-run byte-identity pin. Public: ``ops.publication_bundle``
+    reuses it so the manuscript-time checkers detect adoption through one
+    definition.
+    """
+    adopted: list[str] = []
+    seen: set[str] = set()
+    for rid in run_ids:
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        if _is_adopted_run(experiment_dir, rid):
+            adopted.append(rid)
+    return adopted
+
+
+def _adopted_disclosure_section(adopted: list[str]) -> str:
+    """The code-rendered markdown section disclosing each adopted (unobserved) run.
+
+    Appended to the audit render ONLY when *adopted* is non-empty, so an
+    observed-run report is byte-identical to before this disclosure existed.
+    Deterministic string formatting over identities — the ``cite_render``
+    posture, kept beside the detection so op and render can never disagree on
+    what "adopted" means.
+    """
+    lines: list[str] = ["", f"## Provenance disclosures — adopted runs ({len(adopted)})", ""]
+    for rid in adopted:
+        lines.append(f"- `{rid}` — {_ADOPTED_DISCLOSURE}")
+    lines.append("")
+    lines.append(
+        "> The audit continues over what IS sealed for these runs — the sealed "
+        "table values, claim-check receipts, and decision journals. Determinism "
+        "evidence was never captured for them (the fingerprint ledger is "
+        "observed-runs-only) and is not consumed by this audit."
+    )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _read_json(path: Path) -> Any:
@@ -438,4 +541,20 @@ def cite_check(experiment_dir: Path, *, spec: CiteCheckInput) -> dict[str, Any]:
     # The markdown render rides on the dumped dict so the render path stays
     # wire-free (the ops op owns the Pydantic boundary).
     dumped["markdown"] = render_cite_check(dumped)
+    # Adopted-run (unobserved) disclosure — the runs whose sealed evidence this
+    # audit stands on: the seed run itself, the campaign's kept chain, or an
+    # aggregate's mechanical contributing set. When any was adopted post-hoc the
+    # render DISCLOSES the missing fingerprint envelope and continues over what
+    # IS sealed (no bucket, no verdict, no computed number changes; the wire
+    # shape is untouched). Zero adopted runs → the render is byte-identical to
+    # before (the observed-run regression pin).
+    if seed_kind == "run":
+        audited_runs = [seed_ref]
+    elif seed_kind == "campaign":
+        audited_runs = list(candidates)
+    else:  # aggregate — the contributing set when the table anchors one
+        audited_runs = sorted(contributing) if contributing else []
+    adopted = adopted_run_ids(experiment_dir, audited_runs)
+    if adopted:
+        dumped["markdown"] += _adopted_disclosure_section(adopted)
     return dumped

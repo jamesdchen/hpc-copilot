@@ -445,8 +445,7 @@ _COMBINER_MISSING = RecoveryMenu(
     options=(
         RecoveryOption(
             cli_command=(
-                "hpc-agent redeploy-runtime --experiment-dir <experiment_dir> "
-                "--run-id <run_id>"
+                "hpc-agent redeploy-runtime --experiment-dir <experiment_dir> --run-id <run_id>"
             ),
             when_to_use=(
                 "Always first: re-ships the framework runtime to this run's base "

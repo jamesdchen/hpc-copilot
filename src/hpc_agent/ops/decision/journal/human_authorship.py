@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 
 from ._shared import (
@@ -22,6 +23,29 @@ from ._shared import (
     _read_interview_actors,
     _refuse_missing_authorship,
 )
+
+# ── checker-path elicited inputs (harness-contract checker obligation 3) ──────
+#
+# The checker chain's HUMAN-AUTHORED inputs that never transit append-decision's
+# ``resolved`` (so the REQUIRED_CALLER_FIELDS first-commit trigger cannot see
+# them): the external-baseline CLAIM (``verify-reproduction``) and the directed
+# terminal evidence (``settle-run``; ``adopt-run``'s already-terminal branch
+# settles through the same mechanism). Same partition idiom as
+# ``_FREE_TEXT_CALLER_FIELDS``: a free-text member is checked by the
+# word-overlap rule, a structured member by deterministic token derivation
+# (numbers AND categorical string claims, finding 25).
+ELICITED_FREE_TEXT_FIELDS: frozenset[str] = frozenset({"terminal_evidence"})
+ELICITED_STRUCTURED_FIELDS: frozenset[str] = frozenset({"claimed_values"})
+ELICITED_CHECKER_FIELDS: frozenset[str] = ELICITED_FREE_TEXT_FIELDS | ELICITED_STRUCTURED_FIELDS
+
+# ── adoption-fact provenance (harness-contract checker obligation 1) ──────────
+#
+# The ONLY origins an adoption fact may claim: the HUMAN's typed words, or
+# OBSERVED scheduler/filesystem state the harness actually read. Anything else
+# — agent / llm / inferred / missing — is the round-tripped-guess laundering
+# channel obligation 1 exists to deny (proving run #4's class, at the front
+# door).
+FACT_PROVENANCE_KINDS: frozenset[str] = frozenset({"human", "observed"})
 
 
 def _source_log(
@@ -363,27 +387,7 @@ def _assert_human_authorship(
         # Dev-mode: the consultation (granted home), or the reason it did NOT
         # happen (dangling grant / mid-session revocation), is disclosed the
         # same way — never a silent own-only fallback.
-        own_hash = _repo_hash(experiment_dir)
-        tail = (
-            f" — evidence was sought in repo namespace {own_hash} (experiment_dir {experiment_dir})"
-        )
-        if evidence is not None:
-            consulted = evidence["evidence_logs"]
-            if len(consulted) > 1:
-                tail += f" and granted home namespace {consulted[1]}"
-            elif evidence["dangling_home"]:
-                tail = (
-                    f" — home-log trust for home namespace {evidence['dangling_home']} "
-                    f"is dangling ({evidence['dangling_reason']}); evidence was sought "
-                    f"in repo namespace {own_hash} (experiment_dir {experiment_dir}) only"
-                )
-            elif evidence["revoked"]:
-                tail = (
-                    f" — home-log trust revoked at {evidence['revoked']['ts']} "
-                    f"(home namespace {evidence['revoked']['home_repo_hash']}); evidence "
-                    f"was sought in repo namespace {own_hash} "
-                    f"(experiment_dir {experiment_dir}) only"
-                )
+        tail = _refusal_namespace_tail(experiment_dir, evidence)
         _refuse_missing_authorship(
             "human-authorship gate (conduct rule 9): " + "; ".join(problems) + tail
         )
@@ -405,3 +409,332 @@ def _assert_human_authorship(
         disclosure["dangling_home"] = evidence["dangling_home"]
         disclosure["dangling_reason"] = evidence["dangling_reason"]
     return disclosure
+
+
+def _refusal_namespace_tail(experiment_dir: Path, evidence: dict[str, Any] | None) -> str:
+    """The refusal tail naming the repo namespace(s) the evidence was sought in.
+
+    Extracted VERBATIM from :func:`_assert_human_authorship`'s refuse side
+    (docket #2 — an operator session in the wrong cwd must see WHY their
+    utterance was not found) so the checker-path gates below refuse with the
+    same namespace disclosure: the own namespace always; the granted home
+    namespace when consulted; a dangling grant or a mid-session revocation
+    disclosed the same way — never a silent own-only fallback.
+    """
+    from hpc_agent.state.run_record import repo_hash as _repo_hash
+
+    own_hash = _repo_hash(experiment_dir)
+    tail = f" — evidence was sought in repo namespace {own_hash} (experiment_dir {experiment_dir})"
+    if evidence is not None:
+        consulted = evidence["evidence_logs"]
+        if len(consulted) > 1:
+            tail += f" and granted home namespace {consulted[1]}"
+        elif evidence["dangling_home"]:
+            tail = (
+                f" — home-log trust for home namespace {evidence['dangling_home']} "
+                f"is dangling ({evidence['dangling_reason']}); evidence was sought "
+                f"in repo namespace {own_hash} (experiment_dir {experiment_dir}) only"
+            )
+        elif evidence["revoked"]:
+            tail = (
+                f" — home-log trust revoked at {evidence['revoked']['ts']} "
+                f"(home namespace {evidence['revoked']['home_repo_hash']}); evidence "
+                f"was sought in repo namespace {own_hash} "
+                f"(experiment_dir {experiment_dir}) only"
+            )
+    return tail
+
+
+def _assert_value_derivable_from_evidence(
+    experiment_dir: Path,
+    *,
+    field: str,
+    value: Any,
+    free_text: bool,
+    evidence: dict[str, Any],
+    obligation: str,
+) -> dict[str, Any]:
+    """The harness-captured LOCK leg the checker-path gates share.
+
+    The per-field derivation rules of :func:`_assert_human_authorship`, applied
+    to a value that arrives at a verb's INTAKE rather than through
+    append-decision's ``resolved``: a structured value's number tokens must be
+    human-derivable (:func:`_derivation_rule`) and its categorical string
+    claims must overlap the human word pool (finding 25); a free-text value's
+    word tokens must overlap some human text. The evidence pool is the one
+    *evidence* mapping :func:`_authorship_evidence_texts` returned (own
+    namespace + granted home — the dev-mode legs ride along unchanged). There
+    is NO journal-response commit leg here: at intake there is no human reply
+    on the spec, so the only lock evidence is the harness-captured log — the
+    caller handles the log-absent tier.
+
+    Returns the accept-side disclosure; refuses via
+    :func:`_refuse_missing_authorship` (the authorship-missing marker — a
+    freshly typed human statement resolves it), naming the field, the
+    underivable token(s), and the namespace(s) consulted.
+    """
+    own_texts = list(evidence["own"] or [])
+    home_texts = list(evidence["home"])
+    human_texts = own_texts + home_texts
+    if home_texts:
+        source_desc = (
+            "logged human utterance for this repo or its granted home repo (harness-captured)"
+        )
+    else:
+        source_desc = "logged human utterance for this repo (harness-captured)"
+    remedy = "the human states it in a prompt (captured to the utterance log)"
+
+    human_num_strings, human_num_floats = _human_number_pool(human_texts)
+    human_words: set[str] = set()
+    for text in human_texts:
+        human_words |= _ha_word_tokens(text)
+    log_num_pools = {
+        "own": _human_number_pool(own_texts),
+        "home": _human_number_pool(home_texts),
+    }
+    log_word_pools = {
+        "own": {w for t in own_texts for w in _ha_word_tokens(t)},
+        "home": {w for t in home_texts for w in _ha_word_tokens(t)},
+    }
+
+    disclosure: dict[str, Any] = {
+        "field": field,
+        "evidence_source": "harness_captured",
+        "evidence_logs": list(evidence["evidence_logs"]),
+    }
+    if evidence["dangling_home"]:
+        disclosure["dangling_home"] = evidence["dangling_home"]
+        disclosure["dangling_reason"] = evidence["dangling_reason"]
+
+    if not free_text:
+        value_numbers: dict[str, float] = {}
+        range_eligible: set[str] = set()
+        _collect_value_numbers(value, value_numbers, range_eligible)
+        value_strings: set[str] = set()
+        _collect_value_string_tokens(value, value_strings)
+        if value_numbers or value_strings:
+            number_rules = {
+                norm: _derivation_rule(
+                    val,
+                    norm,
+                    human_num_strings,
+                    human_num_floats,
+                    off_by_one_eligible=norm in range_eligible,
+                )
+                for norm, val in value_numbers.items()
+            }
+            missing = sorted(norm for norm, rule in number_rules.items() if rule is None)
+            missing += sorted(value_strings - human_words)
+            if missing:
+                _refuse_missing_authorship(
+                    f"human-authorship gate ({obligation}): {field} is "
+                    "human-authored — the harness cannot commit its own "
+                    "characterization as the human's input; ask the human to "
+                    f"state it (or {remedy}); value token(s) {missing} derive "
+                    f"from no {source_desc}" + _refusal_namespace_tail(experiment_dir, evidence)
+                )
+            matched_strings = value_strings & human_words
+            accepted_rules = {
+                norm: rule for norm, rule in sorted(number_rules.items()) if rule is not None
+            }
+            disclosure["numbers"] = accepted_rules
+            disclosure["strings"] = sorted(matched_strings)
+            disclosure["source_log"] = _source_log(
+                accepted_rules,
+                value_numbers,
+                matched_strings,
+                log_num_pools,
+                log_word_pools,
+            )
+            return disclosure
+        # No number OR string claims — fall through to the free-text rule.
+    overlap_text = value if isinstance(value, str) else json.dumps(value, default=str)
+    overlap = _ha_word_tokens(overlap_text) & human_words
+    if not overlap:
+        _refuse_missing_authorship(
+            f"human-authorship gate ({obligation}): {field} is human-authored — "
+            "the harness cannot commit its own characterization as the human's "
+            f"input; ask the human to state the {field} (or {remedy}); the "
+            f"value derives from no {source_desc}"
+            + _refusal_namespace_tail(experiment_dir, evidence)
+        )
+    disclosure["rule"] = "word_overlap"
+    disclosure["matched_words"] = sorted(overlap)
+    disclosure["source_log"] = _source_log({}, {}, overlap, log_num_pools, log_word_pools)
+    return disclosure
+
+
+def assert_elicited_value_human_authored(
+    experiment_dir: Path, *, field: str, value: Any
+) -> dict[str, Any]:
+    """Checker obligation 3 gate: an ELICITED checker input is human-authored.
+
+    The field-set extension the harness-contract's checker-path audit owed
+    (obligation 3, ``docs/internals/harness-contract.md``): ``claimed_values``
+    (verify-reproduction external-baseline intake) and ``terminal_evidence``
+    (settle-run intake — and adopt-run's already-terminal branch, which
+    settles through the same mechanism) are HUMAN-AUTHORED inputs; a harness
+    relaying its own characterization as the claim — or as the terminal
+    evidence — voids the check (the LLM-audits-LLM inversion). The mechanism
+    is the SAME one :func:`_assert_human_authorship` applies to
+    ``REQUIRED_CALLER_FIELDS``, reached per-verb at intake because these
+    inputs never transit append-decision's ``resolved``:
+
+    * **Harness-captured tier (the lock)** — the utterance log exists
+      (capability 1; :func:`_authorship_evidence_texts`, dev-mode home
+      widening and MH4 actor scoping included): the value must derive from
+      LOGGED human text under the same rules — every number token
+      human-derivable, every categorical/free-text token in the human word
+      pool. Refuses via :func:`_refuse_missing_authorship` otherwise.
+    * **No utterance log** — DISCLOSED ``unverified_fallback``, never a
+      refusal (the ``settle-aggregate`` posture: refusing every pre-hook
+      install would break back-compat, and at intake there is no
+      journal-response channel — the honest tier note of
+      :func:`_assert_human_authorship` applies verbatim).
+
+    Returns the disclosure (tier + matched rules) for the caller to journal or
+    drop; an EMPTY value is not a commit and is never gated (the callers'
+    own required-field guards refuse emptiness first).
+    """
+    if field not in ELICITED_CHECKER_FIELDS:
+        raise ValueError(
+            f"assert_elicited_value_human_authored: {field!r} is not an "
+            f"ELICITED_CHECKER_FIELDS member ({sorted(ELICITED_CHECKER_FIELDS)}) — "
+            "extend the field set deliberately, never ad hoc."
+        )
+    if value in (None, "", {}, []):
+        return {"field": field, "evidence_source": "empty_value_not_gated"}
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    evidence = _authorship_evidence_texts(experiment_dir, _actor_ids)
+    if evidence is None:
+        from hpc_agent.state.run_record import repo_hash as _repo_hash
+
+        return {
+            "field": field,
+            "evidence_source": "unverified_fallback",
+            "evidence_logs": [_repo_hash(experiment_dir)],
+        }
+    return _assert_value_derivable_from_evidence(
+        experiment_dir,
+        field=field,
+        value=value,
+        free_text=field in ELICITED_FREE_TEXT_FIELDS,
+        evidence=evidence,
+        obligation="checker obligation 3",
+    )
+
+
+def assert_adoption_fact_provenance(
+    experiment_dir: Path, *, facts: dict[str, Any], provenance: dict[str, Any]
+) -> dict[str, Any]:
+    """Checker obligation 1 gate: every adoption fact carries typed provenance.
+
+    The provenance check at adoption intake the harness-contract audit owed
+    (obligation 1): adoption facts — run_id, the command, the cluster
+    placement facts, ``job_ids``, the result layout — MUST come from the HUMAN
+    or from OBSERVED scheduler/filesystem state; the harness must never invent
+    one or round-trip its own prior guess. ``adopt-run``'s intake calls this
+    with its facts and a caller-supplied per-fact annotation mapping::
+
+        {fact_name: {"kind": "human" | "observed", "via": <source>}}
+
+    Per gated fact (empty values are not commits and are never gated):
+
+    * **missing / malformed annotation** — refused (an unattributed adoption
+      fact IS the laundering channel; the authorship-missing marker rides the
+      refusal because a typed human statement resolves it).
+    * **kind outside** :data:`FACT_PROVENANCE_KINDS` (``agent`` / ``llm`` /
+      ``inferred`` / anything else) — refused by vocabulary: only the human's
+      words or observed state are accepted origins.
+    * **``observed``** — ``via`` must name WHAT was read (a scheduler query, a
+      directory listing, a receipt path); an observation with no record of the
+      observation is a characterization, and is refused. Core never verifies
+      the read happened (the harness-asserted trust tier, same limit as the
+      utterance log's actor attribution) — it requires the assertion to be
+      TYPED and on the record.
+    * **``human``** — the fact's value faces the SAME tiered derivation bar as
+      the elicited checker inputs: the harness-captured lock when the
+      utterance log exists, a DISCLOSED ``unverified_fallback`` when it does
+      not.
+
+    Returns the per-fact disclosure mapping for the caller to journal.
+    Structural misuse (a non-dict ``provenance``) raises a plain
+    :class:`errors.SpecInvalid` — no typed utterance can fix a malformed call.
+    """
+    if not isinstance(provenance, dict):
+        raise errors.SpecInvalid(
+            "fact-provenance gate (checker obligation 1): provenance must be a "
+            "mapping of {fact_name: {kind, via}} — got "
+            f"{type(provenance).__name__}."
+        )
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    evidence = _authorship_evidence_texts(experiment_dir, _actor_ids)
+
+    disclosure_facts: dict[str, Any] = {}
+    for name in sorted(facts):
+        value = facts[name]
+        if value in (None, "", {}, []):
+            continue  # an empty value is not a commit and is never gated
+        entry = provenance.get(name)
+        if not isinstance(entry, dict):
+            _refuse_missing_authorship(
+                f"fact-provenance gate (checker obligation 1): adoption fact "
+                f"{name!r} is unattributed — every adoption fact must carry a "
+                "typed provenance annotation {kind: human|observed, via: <source>}. "
+                "The facts come from the HUMAN or from OBSERVED "
+                "scheduler/filesystem state; the harness must never invent one "
+                "or round-trip its own prior guess as a fact."
+            )
+        kind = str(entry.get("kind") or "")
+        if kind not in FACT_PROVENANCE_KINDS:
+            _refuse_missing_authorship(
+                f"fact-provenance gate (checker obligation 1): adoption fact "
+                f"{name!r} claims provenance kind {kind!r} — only "
+                f"{sorted(FACT_PROVENANCE_KINDS)} are accepted origins. An "
+                "agent-attributed or invented fact is the laundering channel "
+                "this gate exists to deny; ask the human to state the fact, or "
+                "read it from the scheduler/filesystem and attribute it "
+                "'observed' with the source named in 'via'."
+            )
+        via = str(entry.get("via") or "").strip()
+        if kind == "observed":
+            if not via:
+                _refuse_missing_authorship(
+                    f"fact-provenance gate (checker obligation 1): adoption fact "
+                    f"{name!r} is attributed 'observed' with no 'via' — an "
+                    "observation must name WHAT was read (a scheduler query, a "
+                    "directory listing, a receipt path). An observation with no "
+                    "record of the observation is a characterization, not "
+                    "observed state."
+                )
+            disclosure_facts[name] = {"kind": "observed", "via": via}
+            continue
+        # kind == "human": the same tiered derivation bar as the elicited inputs.
+        if evidence is None:
+            disclosure_facts[name] = {"kind": "human", "evidence_source": "unverified_fallback"}
+            continue
+        # Structured treatment even for strings: a human-stated command / path
+        # asserts its embedded number tokens AND its word tokens (the
+        # "every number token human-derivable" bar); a value with no claims
+        # falls back to the word-overlap rule inside the shared leg.
+        checked = _assert_value_derivable_from_evidence(
+            experiment_dir,
+            field=name,
+            value=value,
+            free_text=False,
+            evidence=evidence,
+            obligation="checker obligation 1",
+        )
+        disclosure_facts[name] = {"kind": "human", **checked}
+
+    from hpc_agent.state.run_record import repo_hash as _repo_hash
+
+    return {
+        "evidence_source": ("harness_captured" if evidence is not None else "unverified_fallback"),
+        "evidence_logs": (
+            list(evidence["evidence_logs"])
+            if evidence is not None
+            else [_repo_hash(experiment_dir)]
+        ),
+        "facts": disclosure_facts,
+    }

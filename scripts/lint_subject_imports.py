@@ -529,6 +529,15 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         # but string-name composes are unresolvable to this AST pass, so they earn
         # inventory entries (the cite_check.py precedent).
         ("campaign_refill.py", "ops", "queue"),
+        # adopt-run (post-exploration checker): the foreign-run ingest verb
+        # composes the recording-only submit path (ops/submit/runner.
+        # submit_and_record — zero qsub) and the settle-run mechanism's
+        # receipt-gated harvest (ops/monitor) plus the adoption sign-off in
+        # the decision journal. All are functions, not primitives, so the
+        # reaches earn inventory entries (the cite_check.py precedent).
+        ("adopt_run.py", "ops", "submit"),
+        ("adopt_run.py", "ops", "monitor"),
+        ("adopt_run.py", "ops", "decision"),
         # CHAIN-DISPATCH (run-queue plan §5): campaign-run is the driver
         # queue-dispatch starts for every placed item, so its synchronous
         # terminal step is where a queue-placed run RETIRES — and that is the
@@ -583,6 +592,14 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("revise_resolved.py", "ops", "submit"),
         ("scaffold_spec.py", "meta", "campaign"),
         ("scaffold_spec.py", "ops", "submit"),
+        # harness-contract checker obligation 3: settle-run's terminal_evidence
+        # and verify-reproduction's external-baseline claimed_values are gated
+        # at intake by the human-authorship mechanism's elicited-input seam
+        # (ops/decision/journal/human_authorship.py::
+        # assert_elicited_value_human_authored) — a promoted public helper, not
+        # a primitive, so the reach earns an inventory entry (the cite_check.py
+        # precedent).
+        ("settle_run.py", "ops", "decision"),
         ("settle_run.py", "ops", "monitor"),
         ("status_blocks.py", "ops", "monitor"),
         ("status_blocks.py", "ops", "recover"),
@@ -602,6 +619,8 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("supersession.py", "ops", "monitor"),
         ("verify_canary.py", "ops", "aggregate"),
         ("verify_canary.py", "ops", "monitor"),
+        # See the settle_run.py checker-obligation-3 entry above.
+        ("verify_reproduction.py", "ops", "decision"),
         ("walk_submit_ambiguities.py", "ops", "submit"),
         ("write_run_sidecar.py", "ops", "monitor"),
     }

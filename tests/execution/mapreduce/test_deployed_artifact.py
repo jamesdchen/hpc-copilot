@@ -249,9 +249,7 @@ def test_the_menus_redeploy_command_names_a_real_verb() -> None:
 
 def test_tagged_probes_are_keyed_by_tag_not_by_arrival_order() -> None:
     sha = D.local_combiner_sha()
-    stream = (
-        f"{D.COMBINER_PROBE_PREFIX} 1 absent\n{D.COMBINER_PROBE_PREFIX} 0 {sha}\n"
-    )
+    stream = f"{D.COMBINER_PROBE_PREFIX} 1 absent\n{D.COMBINER_PROBE_PREFIX} 0 {sha}\n"
     probes, rest = D.parse_combiner_probes(stream)
 
     assert set(probes) == {"0", "1"}

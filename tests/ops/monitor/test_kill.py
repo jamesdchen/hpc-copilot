@@ -228,3 +228,51 @@ def test_kill_counts_nothing_gone_on_verification_failure(
 def test_kill_rejects_missing_record(tmp_path: Path) -> None:
     with pytest.raises(errors.SpecInvalid):
         kill(experiment_dir=tmp_path, spec=KillSpec(run_id="nope", scheduler="slurm"))
+
+
+def test_kill_works_off_recorded_job_ids_for_an_adopted_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression pin (post-exploration checker): an ADOPTED run — submitted
+    outside hpc-agent, journal record minted post-hoc with the observed job_ids
+    — is killable off the recorded ``job_ids`` + the caller's scheduler alone.
+
+    Kill must not require any submit-time cluster runtime an adopted run lacks:
+    no ``.hpc/submit/<run_id>.jobmap`` marker, no announce dirs, no per-task
+    reporter, no ``script``/``backend``/``job_env`` on the record. The record
+    here is exactly the adopted shape (job_ids present, submit-time keystones
+    empty), plus the adoption decision journaled by the adopt-run intake.
+    """
+    from hpc_agent.state.decision_journal import append_decision
+
+    sent = _capture_ssh(monkeypatch)
+    reconcile_calls = _patch_reconcile(monkeypatch)
+    upsert_run(tmp_path, _record("adopted", job_ids=["9001", "9002"]))
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="adopted",
+        block="adopt-run",
+        response="y",
+        proposal="adopt freestyle run submitted outside hpc-agent",
+    )
+    monkeypatch.setattr(
+        kill_mod, "_ssh_alive_job_ids", lambda *, ssh_target, job_ids, scheduler: set()
+    )
+
+    out = kill(experiment_dir=tmp_path, spec=KillSpec(run_id="adopted", scheduler="slurm"))
+
+    # The cancel is built from the RECORDED job_ids and the CALLER's scheduler —
+    # nothing read from a jobmap marker, announce dir, or submit-time env.
+    assert _login_inner(sent[0]) == "scancel 9001 9002"
+    assert out["requested_count"] == 2
+    assert out["confirmed_count"] == 2
+    assert out["summary"] == "2 requested, 2 confirmed gone"
+    # A FULL kill still settles through the one reconcile definition.
+    assert reconcile_calls == [(tmp_path, "adopted", "slurm")]
+    assert out["settled"] is True
+    # Intent + verified subset are durable on the adopted record too.
+    rec = load_run(tmp_path, "adopted")
+    assert rec is not None
+    assert rec.kill_requested_job_ids == ["9001", "9002"]
+    assert rec.kill_confirmed_job_ids == ["9001", "9002"]

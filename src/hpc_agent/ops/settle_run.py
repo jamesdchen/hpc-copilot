@@ -131,6 +131,21 @@ def settle_run(
             "A settle with no evidence is the surgical status-flip this verb replaces."
         )
 
+    # Guard 4 — checker obligation 3 (docs/internals/harness-contract.md): the
+    # directed evidence is terminal_evidence in the checker chain's vocabulary,
+    # a HUMAN-AUTHORED input. A harness relaying its own characterization as
+    # the evidence voids the settle's provenance, so the value faces the SAME
+    # tiered derivation bar as goal/task_generator: under capability 1 the
+    # evidence's words must derive from a logged human utterance; absent the
+    # log the pass is DISCLOSED as the unverified fallback, never silent.
+    # adopt-run's already-terminal branch settles through this verb, so its
+    # terminal_evidence is gated here too.
+    from hpc_agent.ops.decision.journal import assert_elicited_value_human_authored
+
+    authorship = assert_elicited_value_human_authored(
+        experiment_dir, field="terminal_evidence", value=evidence
+    )
+
     prior_status = str(getattr(record, "status", "") or "")
 
     # (a) Journal the directed evidence as a DECISION — the sign-off with provenance.
@@ -149,6 +164,9 @@ def settle_run(
             "artifact_refs": list(spec.artifact_refs or []),
             "task_counts": dict(spec.task_counts or {}),
             "source": spec.provenance or "human-directed",
+            # Guard 4's accept-side disclosure: which authorship tier the
+            # evidence cleared (harness_captured lock / disclosed fallback).
+            "authorship": authorship,
         },
     )
 

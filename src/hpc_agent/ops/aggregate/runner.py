@@ -89,9 +89,7 @@ def _read_remote_sidecar_and_probe(
         )
     probe, stdout = split_combiner_probe(proc.stdout)
     return (
-        parse_remote_json(
-            stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"
-        ),
+        parse_remote_json(stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"),
         probe,
     )
 
@@ -185,9 +183,7 @@ def verify_per_task_outputs(
     # FIRST, before anything about data: a combine that cannot run is not a
     # question about which task outputs are present. Gating here also covers
     # the empty-wave short-circuit below.
-    refuse_absent_combiner(
-        probe, ssh_target=ssh_target, remote_path=remote_path, run_id=run_id
-    )
+    refuse_absent_combiner(probe, ssh_target=ssh_target, remote_path=remote_path, run_id=run_id)
     task_ids = _wave_task_ids(sidecar, wave)
     if not task_ids:
         return []

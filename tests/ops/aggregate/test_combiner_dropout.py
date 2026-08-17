@@ -318,9 +318,7 @@ class TestPreU5Behaviour:
 class TestGuardedBehaviour:
     """The same fake cluster, the real runners."""
 
-    def test_wave_combine_refuses_early_by_name(
-        self, tmp_path: Path, cluster: FakeCluster
-    ) -> None:
+    def test_wave_combine_refuses_early_by_name(self, tmp_path: Path, cluster: FakeCluster) -> None:
         _seed_run(tmp_path, cluster)
         cluster.drop_combiner()
 
@@ -565,7 +563,6 @@ class TestGuardedBehaviour:
             "wave_1.json",
             "wave_2.json",
         ]
-
 
 
 # ── F8: the S3 watch leg's behaviour on a deploy dropout ────────────────────

@@ -14,6 +14,12 @@ adding core dependencies.
   skeleton plugin distribution showing how a crowd-compute backend
   registers through the `hpc_agent.plugins` entry-point group and the
   `HPCBackend` registry. All compute methods are documented stubs.
+- [`post-exploration-check/`](post-exploration-check/) — the checker
+  happy path end to end: a freestyle raw-sbatch exploration adopted
+  via `adopt-run`, aggregated in code, and claim-checked against
+  human-claimed numbers (`verify-reproduction` external-baseline).
+  Doctrine background:
+  [`docs/design/post-exploration-checker.md`](../docs/design/post-exploration-checker.md).
 
 Background and seam analysis:
 [`docs/design/crowd-compute-backend.md`](../docs/design/crowd-compute-backend.md).

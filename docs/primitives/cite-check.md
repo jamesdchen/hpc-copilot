@@ -106,7 +106,18 @@ one sealed seed:
 - `sources_consulted` — the sealed `metrics_aggregate.json` artifacts whose values
   were pooled (an absent / opaque artifact yields the empty list, honestly).
 - `seed_kind` / `seed_ref` — which seed the sealed pool was resolved from.
-- `markdown` — the code-rendered audit (deterministic; LLM-free render path).
+- `markdown` — the code-rendered audit (deterministic; LLM-free render path). When
+  any audited run was **adopted post-hoc** (the checker front door,
+  `docs/design/post-exploration-checker.md`), it gains a trailing "Provenance
+  disclosures — adopted runs" section stating, per adopted run: *"no fingerprint
+  envelope — run was adopted post-hoc, never observed by the tool"* — and naming
+  what the audit DOES cover (the sealed table values, claim-check receipts,
+  decision journals). Detection is the `adopt-run` two-key check (the sidecar's
+  `extra.adopted` pocket, falling through to the terminal-settle
+  `block == "adopt-run"` journal record). **Disclosure only**: no bucket, no
+  `clean`, and no computed value changes; an observed run carries no marker, so
+  its report is byte-identical to before this disclosure existed (regression-pinned
+  in `tests/ops/test_cite_check.py`).
 
 The `mismatch` bucket (label-anchored "cited X, chain says Y") is a **ruling-gated,
 additive v2** refinement (it only reclassifies some `uncitable` into `mismatch`; it

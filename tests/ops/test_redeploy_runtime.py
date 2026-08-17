@@ -46,9 +46,7 @@ def _no_cluster_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "hpc_agent.infra.clusters.load_clusters_config", lambda: {"hoffman2": {"scheduler": "sge"}}
     )
-    monkeypatch.setattr(
-        "hpc_agent.infra.clusters.resolve_ssh_target", lambda _rec: "user@hoffman2"
-    )
+    monkeypatch.setattr("hpc_agent.infra.clusters.resolve_ssh_target", lambda _rec: "user@hoffman2")
 
 
 def _seed(tmp_path: Path, *, remote_path: str = _BASE, job_env: dict[str, str] | None = None):

@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/adopt_run.input.json",
+  "title": "adopt-run input spec",
+  "description": "Inputs to ``adopt-run``: the foreign run's identity + cluster contract.\n\n``job_ids`` present ⇒ an IN-FLIGHT adoption (the run is still live on the\nscheduler; the record lands ``in_flight`` and hands off to\n``status-watch``). ``job_ids`` absent ⇒ an ALREADY-TERMINAL adoption,\nwhich then REQUIRES ``terminal_evidence`` (the settle-run doctrine: a\nsettle with no evidence is a bare status flip and is refused).",
+  "type": "object",
+  "required": [
+    "run_id",
+    "command",
+    "cluster",
+    "ssh_target",
+    "remote_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The run_id to adopt the foreign run under. Must not already have a sidecar or journal record — adopt-run never clobbers.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the foreign run actually executed. cmd_sha is ALWAYS derived in code as sha256 of the stripped command (full 64 hex) — never caller-supplied.",
+      "minLength": 1,
+      "title": "Command",
+      "type": "string"
+    },
+    "cluster": {
+      "description": "Cluster the foreign run ran on.",
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
+    },
+    "ssh_target": {
+      "description": "user@host the run's cluster is reached at (recorded on the journal record).",
+      "pattern": "^[^@]+@[^@]+$",
+      "title": "Ssh Target",
+      "type": "string"
+    },
+    "remote_path": {
+      "description": "Remote experiment root the foreign run's outputs live under.",
+      "minLength": 1,
+      "title": "Remote Path",
+      "type": "string"
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional profile label for the journal record; defaults to 'adopted'.",
+      "title": "Profile"
+    },
+    "job_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "^\\d[A-Za-z0-9._+\\[\\]\\-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Scheduler job ids of the still-live foreign submission. Present ⇒ in-flight adoption (record lands in_flight, next_block=status-watch). Absent ⇒ already-terminal adoption (terminal_evidence required).",
+      "title": "Job Ids"
+    },
+    "executor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The REAL per-task command, if it differs from `command`. Defaults to `command`. Must satisfy write-run-sidecar's real-per-task-command guard (no dispatcher, no bare script, no {placeholder} leakage).",
+      "title": "Executor"
+    },
+    "result_dir_template": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-task result directory template (needs a per-task placeholder such as {task_id} when task_count > 1). When null, adopt-run infers it from results_sample; inference impossible ⇒ an elicitation envelope, never a guess.",
+      "title": "Result Dir Template"
+    },
+    "task_count": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Number of tasks the foreign run comprised. When null, inferred from results_sample (max trailing task index + 1, gap-safe).",
+      "title": "Task Count"
+    },
+    "summary_artifact": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": "metrics.json",
+      "description": "Per-task summary filename the reducer reads; default metrics.json. Layout inference verifies its presence in the sampled task dirs.",
+      "title": "Summary Artifact"
+    },
+    "results_sample": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LOCAL path/glob anchor onto the run's result tree (a task-dir parent, one task dir, or a glob over task dirs) used to INFER result_dir_template + task_count when they are missing: glob task dirs, detect the trailing-integer task pattern, verify summary_artifact presence. adopt-run declares file_write only and never probes over ssh — a remote / non-resolving anchor yields an elicitation envelope instead of a guess.",
+      "title": "Results Sample"
+    },
+    "terminal_evidence": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "REQUIRED when job_ids is absent: WHAT proves the foreign run's terminal state (e.g. 'reporter RC=0 all-100; result tree on disk'). Journaled as a directed-settle sign-off (scope run, response y, block adopt-run) — an empty value is refused, same doctrine as settle-run.",
+      "title": "Terminal Evidence"
+    },
+    "job_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Scheduler job name; defaults to run_id on the journal record.",
+      "title": "Job Name"
+    },
+    "resources": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional resource asks the foreign run used (recorded verbatim on the sidecar).",
+      "title": "Resources"
+    }
+  }
+}

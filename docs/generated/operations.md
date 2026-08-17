@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**184 operations total**: 151 primitive atoms + 33 workflow atoms.
+**185 operations total**: 152 primitive atoms + 33 workflow atoms.
 
 ## How to read this page
 
@@ -125,12 +125,13 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (38)
+## `mutate` (39)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
+| [`adopt-run`](../primitives/adopt-run.md) | ✗ | file_write | `hpc-agent adopt-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`alerts-ack`](../primitives/alerts-ack.md) | ✓ | file_write | `hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`append-decision`](../primitives/append-decision.md) | ✗ | file_write | `hpc-agent append-decision --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`archive-dossier`](../primitives/archive-dossier.md) | ✓ | network-upload | `hpc-agent archive-dossier --spec <path>` | `_(none)_` | — | — |

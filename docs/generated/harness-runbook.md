@@ -109,3 +109,57 @@ its chain without a per-step human gate.
 | `convergence` | gate (a pass/fail the block decides) | code (a primitive's envelope records the outcome on disk — verifiable, reproducible) | `campaign-converged` |
 | `budget` | gate (a pass/fail the block decides) | code (a primitive's envelope records the outcome on disk — verifiable, reproducible) | `campaign-budget` |
 | `concurrency` | selection (choose one of several branches) | judgement (a genuine break in control flow the driving agent chooses) | `decide-concurrency` |
+
+## The post-exploration checker path
+
+The workflows above mint evidence DURING execution, under observation. The
+checker path is the AFTER-THE-FACT instrument: a run that already completed —
+submitted by any means, observed by nothing — is adopted and checked ex post.
+The principle it implements: **gate by irreversibility and attestation, never
+by step** (`docs/plans/expost-trust-2026-07-30.md`). Exploration stays fast and
+ungated; verification is relocated to after the fact.
+
+The path is a plain verb chain, not a block-drive workflow: the harness invokes
+each verb directly and relays each envelope.
+
+**The chain.**
+
+`adopt-run` → `aggregate-check` → `aggregate-run` → `verify-reproduction`
+(external-baseline) → `evidence-brief`
+
+1. **Adopt the run.** `adopt-run` mints the run record from what ACTUALLY EXISTS —
+   the scheduler's observed state plus the human's adoption facts.
+2. **Gate, then reduce.** `aggregate-check` runs the readiness + integrity gate;
+   `aggregate-run` runs the deterministic combine + reduce. Every aggregate number
+   is computed by the REDUCER — never by the driving agent.
+3. **Claim-check.** `verify-reproduction` with an `external_baseline` block compares
+   the reduced numbers against human-authored claimed values under a caller
+   tolerance. The receipt kind is `claim-check` — NEVER `reproduction`.
+4. **Attest.** `evidence-brief` projects the run's durable records into the evidence
+   digest the human attests against; the decision journal records the outcome.
+
+**Consent.** No block-drive sequencing applies, but the consent posture is
+unchanged: `aggregate-run` carries its greenlight gate INSIDE the verb body — a call
+the run's journal does not greenlight is refused with a self-remediating message,
+and the greenlight is committed through `append-decision` exactly as in the protocol
+above.
+
+**Conformance rules for the driving harness.**
+
+1. **Adoption facts are ELICITED, never invented.** Take them from the human's
+   utterance or from observed scheduler state; a field that is unknown stays unknown.
+2. **`cmd_sha` is DERIVED from the exact command** the run actually executed — never
+   free-typed, never reconstructed from memory.
+3. **`claimed_values` are human-authored free text.** The harness transcribes them
+   verbatim into the `external_baseline` spec; it never rounds, normalises, or
+   corrects them.
+4. **Aggregate numbers come ONLY from the reducer.** The harness never computes,
+   averages, or interpolates a number the reducer did not emit.
+5. **Code renders are relayed VERBATIM.** The verdict sentence, the briefs, and the
+   receipts are deterministic projections; the harness presents them unchanged and
+   does not characterise match or mismatch in its own words.
+6. **A claim-check is NEVER reported as a reproduction.** "Reproduced" requires two
+   OBSERVED runs; an adopted run was never observed. The honest report is the
+   code-rendered verdict — for an adopted run, "the claim is consistent with the
+   adopted run's records (within caller tolerance)" — or a finding that names the
+   moved dimension. Nothing more.

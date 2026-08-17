@@ -1,6 +1,20 @@
 [
   {
     "agent_facing": true,
+    "cli": "hpc-agent adopt-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "adopt_run.input.json",
+    "name": "adopt-run",
+    "output_schema": "adopt_run.output.json",
+    "python": "hpc_agent.ops.adopt_run.adopt_run",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Adopt a run submitted OUTSIDE hpc-agent (freestyle sbatch/qsub) so the fidelity machinery engages: derive cmd_sha from the command, write the sidecar via write-run-sidecar (its guards apply unchanged), mint the journal record WITHOUT any scheduler call, and — when job_ids is absent — settle terminal on directed terminal_evidence through the settle-run mechanism. Refuses a run_id that already has a sidecar or journal record. Missing result layout is inferred from a LOCAL results_sample or elicited; never guessed. next_block: in-flight → status-watch, terminal → aggregate-check; verify-reproduction external-baseline is the claim-comparison path.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "alerts_ack.input.json",

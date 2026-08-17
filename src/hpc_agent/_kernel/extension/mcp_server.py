@@ -292,6 +292,71 @@ _CURATED_EXTRA_VERBS = frozenset(
 # ADD anything). ``tests/test_mcp_science.py`` pins the disjointness both ways.
 _SCIENCE_VERBS = frozenset({"queue-run", "queue-status", "queue-advance"})
 
+# The ``check`` catalog: the POST-EXPLORATION FIDELITY-CHECK surface — the
+# ex-post trust doctrine (docs/plans/expost-trust-2026-07-30.md: "gate by
+# irreversibility and attestation, never by step") repositioned as the PRIMARY
+# surface. Agents explore FREESTYLE (hand-rolled scripts, raw sbatch/qsub —
+# none of which is an hpc-agent primitive); hpc-agent then verifies EX-POST:
+# adopt the run into the journal (``adopt-run``), aggregate in code
+# (``aggregate-check`` / ``aggregate-run`` — the reducer, NEVER the LLM,
+# computes every aggregate number), claim-check the human-claimed numbers
+# (``verify-reproduction`` in external-baseline mode, ``cite-check``,
+# ``verify-relay`` — every relayed figure audited against the run's own
+# corpus), and digest the code-minted evidence (``evidence-brief`` /
+# ``read-decisions``). ``reproduce-run`` / ``settle-run`` / ``status-snapshot``
+# close the loop for re-derivation, operator-bypass tables, and the live
+# fleet read. The notebook-audit family (``audit-preflight``, ``notebook-lint``,
+# ``notebook-audit-view``, ``notebook-status``, ``notebook-record``) is the
+# submit-independent ANALYSIS-audit arm: it engages on any experiment dir with
+# zero submit dependency — a passed notebook audit is the ticket into submit
+# and equally a post-exploration check of the analysis source (coordinator
+# addendum 2026-08-14).
+#
+# This is a FIXED, hand-authored allowlist INTERSECTED with the read/act
+# mutation policy (:func:`allowed_primitives`), exactly like ``science`` and
+# unlike ``curated`` (its own ungated allowlist): the query/validate members
+# (verify-reproduction / verify-relay / cite-check / evidence-brief /
+# read-decisions / audit-preflight / notebook-lint / notebook-audit-view /
+# notebook-status) are ALWAYS reachable, while the workflow/mutate members
+# (adopt-run / settle-run / aggregate-check / aggregate-run / reproduce-run /
+# status-snapshot / append-decision / notebook-record) are reachable ONLY
+# under ``--allow-mutations``. The default read-only posture stays intact, and
+# the intersection can only ever REMOVE a member, never ADD a verb outside the
+# fixed list — so the documented check invocation carries ``--allow-mutations``
+# (same shape as the science pairing).
+#
+# ``adopt-run`` is referenced by name but is being baked by a SIBLING unit
+# (the adopt-run verb may not be in operations.json yet while the swarm is in
+# flight). The listing guards on registry presence — the same graceful-skip
+# the curated extras use for unbuilt siblings (see the poll-detached note
+# above) — so its absence never breaks the catalog and it appears the moment
+# it lands; :meth:`McpServer.__init__` additionally names any not-yet-present
+# member on stderr so the gap is a disclosed fact, not a silent drop.
+_CHECK_VERBS = frozenset(
+    {
+        # The run-check spine: adopt → aggregate-in-code → claim-check → evidence.
+        "adopt-run",
+        "settle-run",
+        "aggregate-check",
+        "aggregate-run",
+        "verify-reproduction",
+        "verify-relay",
+        "evidence-brief",
+        "append-decision",
+        "read-decisions",
+        "cite-check",
+        "reproduce-run",
+        "status-snapshot",
+        # The submit-independent analysis-audit family (coordinator addendum
+        # 2026-08-14) — checker verbs by nature, zero submit dependency.
+        "audit-preflight",
+        "notebook-lint",
+        "notebook-audit-view",
+        "notebook-status",
+        "notebook-record",
+    }
+)
+
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.
 _RESOURCES: dict[str, tuple[tuple[str, ...], str]] = {
@@ -1006,13 +1071,26 @@ class McpServer:
         catalog: str = "full",
         runner: CliRunner | None = None,
     ) -> None:
-        if catalog not in ("full", "tiered", "curated", "science"):
+        if catalog not in ("full", "tiered", "curated", "check", "science"):
             raise ValueError(
-                f"catalog must be 'full', 'tiered', 'curated', or 'science', got {catalog!r}"
+                f"catalog must be 'full', 'tiered', 'curated', 'check', or 'science', "
+                f"got {catalog!r}"
             )
         self._registry = registry
         self._allow_mutations = allow_mutations
         self._catalog = catalog
+        if catalog == "check":
+            # Disclose, never crash: a fixed-allowlist member not (yet) in the
+            # registry — ``adopt-run`` while its sibling bake is in flight — is
+            # skipped by the listing's presence guard; name it on stderr (the
+            # diagnostics channel, never the JSON-RPC stream) so the gap is a
+            # counted fact, not a silent drop. Fires once per server, at
+            # construction.
+            present = {name for name, meta in registry.items() if isinstance(meta.cli, CliShape)}
+            for verb in sorted(_CHECK_VERBS - present):
+                sys.stderr.write(
+                    f"[mcp] check catalog: verb {verb!r} not in the registry (yet) — skipped\n"
+                )
         # Default to the WARM in-process runner (reuses this process's registry;
         # no per-call interpreter cold-start). ``_subprocess_cli_runner`` (full
         # process isolation) is no longer the default but stays injectable as the
@@ -1084,6 +1162,28 @@ class McpServer:
         """The science catalog's verb set (keys of :meth:`_science_metas`)."""
         return list(self._science_metas())
 
+    def _check_metas(self) -> dict[str, PrimitiveMeta]:
+        """The ``check`` catalog's verb→meta map: the fixed check-tier allowlist
+        (:data:`_CHECK_VERBS`) INTERSECTED with the read/act mutation policy.
+
+        Same mechanism as :meth:`_science_metas` (and unlike curated's ungated
+        allowlist): the query/validate members are always reachable, while the
+        workflow/mutate members (``adopt-run``, ``aggregate-run``,
+        ``append-decision``, ...) are listed/invocable ONLY under
+        ``--allow-mutations`` — the default read-only posture, intact. The
+        intersection can only ever REMOVE a member — it can NEVER add a verb
+        outside the fixed allowlist — and a member not (yet) in the registry
+        (``adopt-run`` mid-bake) is skipped by the same presence guard, so the
+        listing never crashes on an in-flight sibling (it is named on stderr at
+        construction instead).
+        """
+        allowed = self._allowed()
+        return {name: allowed[name] for name in sorted(_CHECK_VERBS) if name in allowed}
+
+    def _check_names(self) -> list[str]:
+        """The check catalog's verb set (keys of :meth:`_check_metas`)."""
+        return list(self._check_metas())
+
     def _invocable(self) -> dict[str, PrimitiveMeta]:
         """Primitives this server may INVOKE, per the active catalog's boundary.
 
@@ -1096,6 +1196,8 @@ class McpServer:
         """
         if self._catalog == "curated":
             return self._curated_metas()
+        if self._catalog == "check":
+            return self._check_metas()
         if self._catalog == "science":
             return self._science_metas()
         return self._allowed()
@@ -1109,6 +1211,17 @@ class McpServer:
             # ``allow_mutations`` (design §7 — curated is itself the allowlist).
             curated = self._curated_metas()
             return [_tool_definition(name, meta) for name, meta in curated.items()]
+        if self._catalog == "check":
+            # The POST-EXPLORATION FIDELITY-CHECK surface (the ex-post trust
+            # doctrine): adopt → aggregate-in-code → claim-check → evidence,
+            # plus the submit-independent analysis-audit family — each as its
+            # own typed tool. A FIXED allowlist intersected with the mutation
+            # policy — the workflow/mutate members appear only under
+            # --allow-mutations; the query/validate members always. A member
+            # not yet in the registry (adopt-run mid-bake) is skipped by the
+            # presence guard, never a crash (:meth:`_check_metas`).
+            check = self._check_metas()
+            return [_tool_definition(name, meta) for name, meta in check.items()]
         if self._catalog == "science":
             # The run-queue PRODUCER subset (queue-run / queue-status /
             # queue-advance), each as its own typed tool. A FIXED allowlist
@@ -1323,13 +1436,29 @@ class McpServer:
             )
         elif self._catalog == "curated":
             catalog_note = (
-                "Curated catalog: the human-amplification block verbs (each "
-                "returns a next_block suggestion), the loop driver `block-drive` "
-                "and the greenlight commit `append-decision`, plus the "
-                "recovery/opt-in verbs (doctor, kill, net-triage, submit-speculate) "
-                "are exposed as typed tools. Drive the submit/aggregate/campaign "
-                "loops via `block-drive` and commit each `y` via `append-decision` "
-                "— do not hand-author specs on the CLI."
+                "Curated catalog: the CALLER-DRIVEN SUBMISSION instrument — the "
+                "opt-in observation for runs where you want evidence minted "
+                "DURING execution (the primary posture is the post-exploration "
+                "check path, served by the `check` catalog). The "
+                "human-amplification block verbs (each returns a next_block "
+                "suggestion), the loop driver `block-drive` and the greenlight "
+                "commit `append-decision`, plus the recovery/opt-in verbs "
+                "(doctor, kill, net-triage, submit-speculate) are exposed as "
+                "typed tools. Drive the submit/aggregate/campaign loops via "
+                "`block-drive` and commit each `y` via `append-decision` — do "
+                "not hand-author specs on the CLI."
+            )
+        elif self._catalog == "check":
+            catalog_note = (
+                "Check catalog: the post-exploration check verbs as typed tools "
+                "— adopt-run, settle-run, aggregate-check, aggregate-run, "
+                "verify-reproduction, verify-relay, cite-check, evidence-brief, "
+                "read-decisions, append-decision, reproduce-run, status-snapshot, "
+                "plus the submit-independent analysis-audit family "
+                "(audit-preflight, notebook-lint, notebook-audit-view, "
+                "notebook-status, notebook-record). The query/validate members "
+                "are always reachable; the workflow/mutate members require "
+                "--allow-mutations, so pair this catalog with it."
             )
         elif self._catalog == "science":
             catalog_note = (
@@ -1356,6 +1485,44 @@ class McpServer:
         from hpc_agent._build_info import full_version
 
         server_version = full_version()
+        # The checker-first posture (ex-post trust doctrine,
+        # docs/plans/expost-trust-2026-07-30.md): every catalog's instructions
+        # lead with the post-exploration check path, and the block-drive loops
+        # are reframed as the opt-in alternative — EXCEPT ``science``, whose
+        # producer surface is disjoint from the check verbs by construction, so
+        # it keeps its exact standing instructions (the posture names verbs
+        # that are unreachable there).
+        if self._catalog == "science":
+            intro = (
+                f"hpc-agent {server_version} MCP server. Tools mirror the "
+                "`hpc-agent` CLI registry (`hpc-agent capabilities`); each tool "
+                "result carries the full CLI envelope in structuredContent "
+                "(error_code, category, retry_safe, exit_code). "
+            )
+            posture_note = ""
+        else:
+            intro = (
+                f"hpc-agent {server_version} MCP server — a POST-EXPLORATION "
+                "FIDELITY CHECKER. Tools mirror the `hpc-agent` CLI registry "
+                "(`hpc-agent capabilities`); each tool result carries the full "
+                "CLI envelope in structuredContent (error_code, category, "
+                "retry_safe, exit_code). "
+            )
+            posture_note = (
+                "Agents explore freestyle (hand-rolled scripts, raw "
+                "sbatch/qsub); hpc-agent verifies ex-post. The primary path: "
+                "`adopt-run` adopts the run into the journal → "
+                "`aggregate-check`/`aggregate-run` aggregate in code → "
+                "`verify-reproduction` in external-baseline mode claim-checks "
+                "the human-claimed numbers → `evidence-brief` digests the "
+                "code-minted evidence. Commit each human `y` via "
+                "`append-decision`; relay code renders VERBATIM — never a "
+                "figure from memory — and NEVER hand-author aggregate numbers: "
+                "the reducer computes them, the LLM never does. The "
+                "submit/aggregate/campaign block-drive loops remain as the "
+                "opt-in alternative for caller-driven submission — use them "
+                "when you want evidence minted DURING the run. "
+            )
         return {
             "protocolVersion": requested if isinstance(requested, str) else _PROTOCOL_VERSION,
             "capabilities": {
@@ -1365,12 +1532,9 @@ class McpServer:
             },
             "serverInfo": {"name": "hpc-agent", "version": server_version},
             "instructions": (
-                f"hpc-agent {server_version} MCP server. Tools mirror the "
-                "`hpc-agent` CLI registry (`hpc-agent capabilities`); each tool "
-                "result carries the full CLI envelope in structuredContent "
-                "(error_code, category, retry_safe, exit_code). "
-                f"{mutation_note} {catalog_note} Compare serverInfo.version against "
-                "your client's expected hpc-agent version to detect skew."
+                f"{intro}{mutation_note} {posture_note}{catalog_note} Compare "
+                "serverInfo.version against your client's expected hpc-agent "
+                "version to detect skew."
             ),
         }
 

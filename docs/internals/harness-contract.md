@@ -771,8 +771,232 @@ the authorship BAR is untouched.
   proven by BEHAVIOR from something other than our own core (and, if ever
   possible, a passive detection seam). Size: M.
 
+## The checker-path obligations (post-exploration fidelity check)
+
+The second posture this contract binds: hpc-agent as a POST-EXPLORATION
+FIDELITY CHECKER driven by a foreign agent harness (the R-d ruling —
+adversarial verification as a product primitive, generalized
+verify-relay/claim-check — `docs/plans/expost-trust-2026-07-30.md`). The
+harness arrives AFTER someone else's exploration and ADOPTS what it found:
+`adopt-run` (run_id + the exact command + cluster placement facts
+(cluster / ssh_target / remote_path), optionally `job_ids` — present ⇒ the
+run is in flight — and optionally the result layout
+(result_dir_template / task_count / summary_artifact / a results sample);
+`terminal_evidence` REQUIRED when `job_ids` is absent) → `aggregate-check` /
+`aggregate-run` → `verify-reproduction` in EXTERNAL-BASELINE mode →
+`evidence-brief`, with every human `y` journaled via `append-decision`. The
+obligations below bind ANY harness driving that chain. They are the
+checker-path instance of the load-bearing principle: **a guard the LLM itself
+satisfies is not a guard** — each obligation moves a fact OUT of the driving
+agent's reach, either by handing authorship to the human (through capability
+1's typed channel) or by handing derivation / comparison / render to code.
+
+**HONEST STATUS (as of contract 1.3.0, updated 2026-08-14).** The `adopt-run`
+verb has now LANDED (`ops/adopt_run.py` + `_wire/actions/adopt_run.py`), so its
+seams are citable below. The enforcement lines cite EXISTING gates only; where
+a gate exists but its adoption-intake WIRING is still owed, the line says so —
+no gate name is invented. A wire-shape validation (the `cmd_sha` hex pattern)
+is a FORMAT check and is never cited below as a truth check. The existing
+`hpc-claim-check` skill (`slash_commands/skills/hpc-claim-check/SKILL.md`)
+already states the naming-lock doctrine for the claim-check front door; this
+section is the contract-level record, enforcement pointers included.
+
+1. **FACT PROVENANCE.** The adoption facts — run_id, the command, the cluster
+   placement facts, `job_ids`, the result layout — MUST come from the HUMAN or
+   from OBSERVED scheduler/filesystem state (a scheduler record the harness
+   actually read, a directory listing it actually took). The harness MUST NEVER
+   invent an adoption fact, and MUST NEVER round-trip its own prior GUESS back
+   as a fact: an agent-authored hypothesis re-entered through the adoption spec
+   is the laundering channel this posture exists to deny — the same class as a
+   fabricated sweep (proving run #4), at the front door. `terminal_evidence`
+   in the `job_ids`-absent case is an adoption fact like any other: observed
+   state or human words, never the harness's characterization.
+   **Enforcement — SEAM LANDED; adoption-intake WIRING owed.** The provenance
+   gate now EXISTS and fires
+   (`ops/decision/journal/human_authorship.py::assert_adoption_fact_provenance`,
+   fire paths pinned by
+   `tests/ops/decision/test_checker_elicited_authorship.py`): every non-empty
+   adoption fact must carry a typed annotation `{kind: human|observed, via}` —
+   a missing annotation, a kind outside `{human, observed}` (agent / llm /
+   inferred), or an `observed` claim naming no source is REFUSED with the
+   authorship-missing marker; a `human`-attributed fact faces the same tiered
+   derivation bar as obligation 3's gate (harness-captured lock under
+   capability 1; DISCLOSED `unverified_fallback` without it). Honest residue:
+   `adopt-run`'s intake does not yet CALL it (its wire model carries no
+   provenance annotation field), and core never verifies an `observed` read
+   actually happened — the annotation is harness-asserted, the same trust
+   limit as the utterance log's actor attribution. The two adjacent backstops
+   stand: `append-decision`'s consent boundaries and `verify-relay`'s
+   after-the-fact contradiction flag. The OWED wiring: `adopt-run` gains a
+   per-fact provenance field and calls the landed gate at intake.
+
+2. **IDENTITY.** `cmd_sha` is DERIVED BY THE TOOL from the exact command
+   string; a harness MUST NEVER supply, retype, or "helpfully correct" a hash.
+   A harness-typed hash is agent-authored identity — the dedup/resume key
+   corrupted by the one process that benefits from the corruption.
+   **Enforcement — existing (both paths tool-derived).**
+   `incorporation/build/compute_run_id.py::compute_run_id` is the submit-path
+   derivation site (run_id / cmd_sha / total off the materialized task list);
+   `ops/write_run_sidecar.py::_assert_identity_matches_tasks` REFUSES a
+   declared `cmd_sha` / `task_count` / `run_id` that disagrees with the
+   materialized list (finding 21, run #6 F1) — refuse-on-provable-miss, firing
+   only when `.hpc/tasks.py` is PRESENT. The previously OWED adopted-path seam
+   has LANDED: `ops/adopt_run.py::_derive_cmd_sha` computes the hash IN CODE
+   as sha256 of the stripped adopted command, and the wire model
+   (`_wire/actions/adopt_run.py::AdoptRunInput`, `extra="forbid"`) refuses a
+   smuggled caller-supplied `cmd_sha` field outright — so the hash is
+   tool-computed even when no local tasks.py gives a cross-check target. What
+   the command string itself IS still rests on obligation 1's provenance rule.
+
+3. **AUTHORSHIP.** `claimed_values` and `terminal_evidence` are
+   HUMAN-AUTHORED inputs, ELICITED AS FREE TEXT THE HUMAN TYPES. A harness
+   relaying its own characterization as the claim — or as the terminal
+   evidence — VOIDS THE CHECK: the comparison would then grade agent-authored
+   text against agent-harvested numbers, the LLM-audits-LLM reviewer the moat
+   inverts (`ops/decision/journal/verify_relay.py`'s framing). Elicitation
+   MUST ride capability 1's typed channel with §2's provenance filter applied:
+   a CLICK on an agent-authored option is not typed text (the
+   `answer_capture._is_clicked` posture), so a claim composed of offered
+   options carries no authorship the posture accepts.
+   **Enforcement — existing (tiered lock, wired at both intakes).** The
+   capture channel and the typed-only provenance filter are pinned by the §2
+   write API (this page). The mechanical gate is now field-extended: the SAME
+   derivation mechanism `_assert_human_authorship` applies to
+   `REQUIRED_CALLER_FIELDS` is applied to the checker's elicited inputs by
+   `ops/decision/journal/human_authorship.py::assert_elicited_value_human_authored`
+   over `ELICITED_CHECKER_FIELDS` (`claimed_values` structured — every number
+   token human-derivable, every categorical token in the human word pool,
+   finding 25; `terminal_evidence` free-text — word overlap, the `goal` rule),
+   reached PER-VERB at intake because these inputs never transit
+   append-decision's `resolved`: `ops/verify_reproduction.py` gates
+   `claimed_values` at external-baseline dispatch (before any receipt) and
+   `ops/settle_run.py` gates the directed evidence as guard 4 (disclosing the
+   cleared tier on the journaled sign-off). Fire + happy paths pinned by
+   `tests/ops/decision/test_checker_elicited_authorship.py`. Honest tiering,
+   verbatim from the append-decision gate: the refusal is a LOCK only under
+   capability 1 (utterance log present); with no log the pass is a DISCLOSED
+   `unverified_fallback`, never silent (the settle-aggregate posture —
+   refusing every pre-hook install would break back-compat). Honest residue:
+   `adopt-run`'s already-terminal branch MIRRORS settle-run's steps rather
+   than calling the verb, so its `terminal_evidence` intake still owes the
+   same one-line gate call.
+
+4. **NUMBERS.** Every aggregate number a harness reports MUST come from the
+   REDUCER'S CODE RENDER — never a recomputation. The comparison load path
+   reads reduced metrics through the SAME pure reducer the aggregate flow uses
+   (`execution/mapreduce/reduce/metrics.py::reduce_partials`, "never a
+   re-implementation"), and every verdict line is code-rendered off the
+   receipt keys (`ops/verify_reproduction.py::_render_reason` /
+   `_render_tiered_reason` / `_render_claim_reason` — "never LLM-authored,"
+   the D6 archive/interface split). A harness that recomputes, rounds, or
+   re-ranks numbers itself has LEFT THE CONTRACT: the aggregate belongs to the
+   reducer, the ordering belongs to the record, and the harness carries both
+   to the human untouched.
+   **Enforcement — existing, heuristic-honest.** `verify-relay`'s number audit
+   flags a number that matches no source number as a `number` mismatch (a
+   rounding that CHANGES A DIGIT is flagged, never a prefix pass) and a number
+   the records cannot support at all as `unverifiable`; capability 2's relay
+   enforcement point is what RUNS the audit on the turn-final message
+   (degrading to the verb-only posture where capability 2 is absent — the
+   weaker guarantee named above). Coverage is the audit's own
+   USEFUL-conservative bar — recomputed and rounded numbers have no source and
+   are flagged; a re-rank reaches the human only as a state claim the records
+   do not support — never perfect detection, flagged rather than promised.
+
+5. **RELAYS VERBATIM.** Code renders — verdicts, receipts, findings, the
+   consistency sentence — are relayed VERBATIM. Paraphrase is a BREACH: a
+   paraphrase is where a number or a verdict quietly changes, and the
+   determinism of the render is exactly what the relay owes the human.
+   **Enforcement — existing (capability 2).**
+   `ops/decision/journal/verify_relay.py` is the deterministic audit (the
+   machine counterpart to conduct rule 10 — "deterministic code auditing the
+   LLM against the durable record"); `_kernel/hooks/relay_audit_stop.py` is
+   the reference enforcement point (block the stop ONCE on a `number` /
+   `state` / `run_id` contradiction, forcing the correction). A harness that
+   provides capability 2 by either conforming shape (Stop-hook inspection +
+   act, or a response gateway — "Capability 2, split") earns the seatbelt;
+   absent it, the relay audit degrades HONESTLY to the verb-only posture, and
+   an unaudited paraphrase can reach the human.
+
+6. **NAMING LOCK.** An adopted run — a claim-checked run — is NEVER reported
+   as "reproduced." "Reproduced" requires two OBSERVED runs; an external claim
+   was never observed, and an adopted history arrives unattested. The
+   STRONGEST HONEST SENTENCE the machinery can emit is consistency-with-records
+   within tolerance, and even that sentence is CODE-EMITTED — one constant per
+   baseline provenance (`ops/verify_reproduction.py::CLAIM_CONSISTENT_SENTENCE`,
+   "the claim is consistent with a fresh observed run (within caller
+   tolerance)", and `CLAIM_CONSISTENT_SENTENCE_ADOPTED`, "the claim is
+   consistent with the adopted run's records (within caller tolerance)",
+   selected by `_is_adopted_sidecar` off adopt-run's `extra.adopted` marker) —
+   relayed under obligation 5. A mismatch is a DATED FINDING, never an accusation,
+   never blocking — the human concludes; core compares.
+   **Enforcement — existing, fully mechanical (onboard-by-reproduction ruling
+   6b).** `ops/verify_reproduction.py::_assert_receipt_kind_matches_baseline`
+   refuses a reproduction-kind receipt with an external baseline — both the
+   recorded-original and the claim-check paths route through it, so the
+   launder is refused BY CONSTRUCTION (`SpecInvalid`); the storage layer
+   enforces the same lock (`_claim_check_receipt_path` — a claim-check writes
+   `claim_check_receipts.jsonl`, NEVER the reproduction ledger); a
+   mismatch/incomparable exits 0 with `needs_decision` (`_run_claim_check`);
+   and the comparison mints NO fingerprint sample, so an unobserved claim can
+   never widen the measured envelope. The skill-level doctrine copy lives in
+   `slash_commands/skills/hpc-claim-check/SKILL.md` ("The naming lock").
+
+**Follow-on seams.** (a) LANDED as a gate, wiring owed: the adoption-intake
+provenance check (`assert_adoption_fact_provenance`) exists and fires;
+`adopt-run` still owes the per-fact provenance field + the intake call
+(obligation 1). (b) LANDED and wired: the authorship gate's field-set
+extension to `claimed_values` / `terminal_evidence` (obligation 3) — the one
+residue is `adopt-run`'s mirrored terminal branch calling
+`assert_elicited_value_human_authored` on its `terminal_evidence`. (c) LANDED:
+the adopted-command `cmd_sha` derivation (`_derive_cmd_sha`) keeps obligation
+2 mechanical without a local tasks.py. None owns a contract-version bump:
+these are checker-path gates, not negotiation-report capabilities — the
+three-way pin stays where the capability sections leave it.
+
 ## Drift log
 
+- **2026-08-14 (checker-path gates landed — obligations 1/2/3 leave
+  doctrine-only).** The owed seams the checker-path audit named (same day,
+  entry below) are now CODE. Obligation 3 is ENFORCED at both intakes:
+  `ops/decision/journal/human_authorship.py::assert_elicited_value_human_authored`
+  extends the `_assert_human_authorship` derivation mechanism (same substrate
+  helpers, same evidence tiers, same refusal marker) to
+  `ELICITED_CHECKER_FIELDS` = {`claimed_values`, `terminal_evidence`}, wired
+  per-verb at `ops/verify_reproduction.py` (external-baseline dispatch, before
+  any receipt) and `ops/settle_run.py` (guard 4, tier disclosed on the
+  journaled sign-off) — per-verb because these inputs never transit
+  append-decision's `resolved`. Obligation 1's gate LANDED as
+  `assert_adoption_fact_provenance` (typed `{kind: human|observed, via}`
+  annotation per adoption fact; unattributed / agent-attributed / sourceless
+  observations refused; human-attributed values face the same derivation
+  tiers) — wiring into `adopt-run`'s intake still OWED (its wire model has no
+  provenance field yet). Obligation 2's owed adopted-path derivation landed
+  with the verb itself (`ops/adopt_run.py::_derive_cmd_sha` + the wire's
+  `extra="forbid"`), and obligation 6 now names BOTH code-emitted consistency
+  sentences (`CLAIM_CONSISTENT_SENTENCE` / `CLAIM_CONSISTENT_SENTENCE_ADOPTED`).
+  Fire paths pinned by `tests/ops/decision/test_checker_elicited_authorship.py`.
+  Honest tier note carried verbatim: the new gates LOCK only under capability 1;
+  with no utterance log the pass is a DISCLOSED `unverified_fallback`, never
+  silent. No contract-version bump: checker-path gates, not negotiation-report
+  capabilities — the three-way pin stands at 1.3.0.
+- **2026-08-14 (checker-path obligations — the post-exploration fidelity-checker
+  posture).** Added "The checker-path obligations (post-exploration fidelity
+  check)": six obligations binding a harness that drives the adopt-run checker
+  chain (fact provenance, tool-derived identity, human authorship of claims +
+  terminal evidence, reducer-only numbers, verbatim relays, the naming lock).
+  Enforcement recorded HONESTLY per obligation: the naming lock is fully
+  mechanical (verify-reproduction's ruling-6b refusal seam + storage separation
+  + the code-emitted consistency sentence); numbers and relays are mechanical
+  through verify-relay's number/state audit + capability 2 (verb-only
+  degradation named); identity is PARTIAL (write-run-sidecar's identity
+  cross-check is refuse-on-provable-miss — it needs a local `.hpc/tasks.py`);
+  fact provenance and claim/evidence authorship are DOCTRINE-ONLY today (no
+  provenance gate exists at adoption intake — the verb itself is landing
+  separately, so none of its seams were cited; the authorship gate's field set
+  does not name the checker's elicited inputs). Owed seams named; no gate name
+  invented. No contract-version bump: docs-only, no new negotiation-report
+  capability — the three-way pin stands at 1.3.0.
 - **2026-07-17 (anti-vendor-lockout Wave C, T6 + T7 + T8).** The two non-hook
   conforming shapes this page SPECIFIED under "Capability 2, split: INSPECT vs
   ACT" are now BUILT and certified: the **response-gateway** ACT adapter

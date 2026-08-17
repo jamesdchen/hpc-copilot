@@ -36,6 +36,7 @@ source of truth.
 hpc-agent mcp-serve                      # read-only, full catalog (default)
 hpc-agent mcp-serve --allow-mutations    # also expose submit/aggregate/scaffold
 hpc-agent mcp-serve --catalog tiered     # find/describe/run-primitive only
+hpc-agent mcp-serve --catalog check --allow-mutations   # post-exploration check
 ```
 
 It speaks newline-delimited JSON-RPC 2.0 on **stdout**; diagnostics go to
@@ -115,6 +116,34 @@ until pulled on demand. This mirrors the CLI's `find` → `describe` → invoke
 discovery and is the recommended mode for context-sensitive / long-running
 loops. `run-primitive` takes `{ "name": "<primitive>", "arguments": {...} }` and
 is subject to the same safety gate.
+
+### `--catalog check`
+
+The POST-EXPLORATION FIDELITY-CHECK surface — the primary posture of the
+tool (the ex-post trust doctrine,
+[`docs/plans/expost-trust-2026-07-30.md`](../plans/expost-trust-2026-07-30.md)):
+agents explore freestyle (hand-rolled scripts, raw `sbatch`/`qsub`), then
+hpc-agent verifies ex-post. The check path: `adopt-run` adopts the run into
+the journal → `aggregate-check`/`aggregate-run` aggregate in code (the
+reducer, never the LLM, computes every aggregate number) →
+`verify-reproduction` in external-baseline mode claim-checks the
+human-claimed numbers → `evidence-brief` digests the code-minted evidence.
+Each human `y` is committed via `append-decision`; relayed code renders go
+out verbatim (`verify-relay` audits every relayed figure).
+
+Membership is a FIXED allowlist: the verbs above plus `settle-run`,
+`cite-check`, `read-decisions`, `reproduce-run`, `status-snapshot`, and the
+submit-independent analysis-audit family (`audit-preflight`, `notebook-lint`,
+`notebook-audit-view`, `notebook-status`, `notebook-record`) — checker verbs
+by nature, engaging on any experiment dir with zero submit dependency. Like
+`science` (unlike `curated`) the allowlist is intersected with the read/act
+policy: the query/validate members are always reachable, while the
+workflow/mutate members need `--allow-mutations`, so the documented
+invocation pairs the two flags. A member not yet in the registry is skipped
+gracefully and appears the moment it lands. The
+submit/status/aggregate/campaign block-drive loops (the `curated`
+catalog) remain as the opt-in alternative for caller-driven submission —
+when you want evidence minted DURING the run.
 
 ### The failure contract is preserved
 

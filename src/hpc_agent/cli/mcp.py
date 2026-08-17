@@ -13,8 +13,21 @@ as tools. ``--allow-mutations`` additionally exposes the mutating verbs
 (submit / aggregate / scaffold); the registry has no scheduler cancel/submit
 verb, so those remain unreachable regardless. ``--catalog tiered`` advertises
 only ``find`` / ``describe`` / ``run-primitive`` to keep per-tool schemas out of
-the model's context for large catalogs. ``--catalog science`` advertises the
-run-queue PRODUCER subset for a coordinating agent (Claude Science —
+the model's context for large catalogs. ``--catalog check`` advertises the
+POST-EXPLORATION FIDELITY-CHECK surface (the ex-post trust doctrine,
+``docs/plans/expost-trust-2026-07-30.md``): agents explore freestyle
+(hand-rolled scripts, raw sbatch/qsub), then hpc-agent verifies ex-post —
+adopt-run / settle-run / aggregate-check / aggregate-run (the reducer, never
+the LLM, computes every aggregate number) / verify-reproduction / verify-relay
+/ cite-check / evidence-brief / read-decisions / append-decision /
+reproduce-run / status-snapshot, plus the submit-independent analysis-audit
+family (audit-preflight, notebook-lint, notebook-audit-view, notebook-status,
+notebook-record). A FIXED allowlist intersected with the read/act policy, like
+``science`` (unlike ``curated``): the query/validate members are always
+reachable; the workflow/mutate members need ``--allow-mutations``, so the
+documented check invocation pairs the two flags. ``--catalog science``
+advertises the run-queue PRODUCER subset for a coordinating agent (Claude
+Science —
 ``docs/design/claude-science-integration.md``): EXACTLY ``queue-run`` +
 ``queue-status`` + ``queue-advance``, disjoint by construction from every
 gate-crossing verb (``queue-dispatch`` / ``submit-*`` / ``append-decision`` /
@@ -150,7 +163,7 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
                 _reconfigure(encoding="utf-8")
 
     catalog = getattr(args, "catalog", "full")
-    if catalog not in ("full", "tiered", "curated", "science"):
+    if catalog not in ("full", "tiered", "curated", "check", "science"):
         catalog = "full"
     server = build_server(
         allow_mutations=bool(getattr(args, "allow_mutations", False)),
@@ -189,16 +202,28 @@ def register(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--catalog",
-        choices=["full", "tiered", "curated", "science"],
+        choices=["full", "tiered", "curated", "check", "science"],
         default="full",
         help=(
             "full (default): one typed tool per read-only primitive. tiered: "
             "expose only find/describe/run-primitive so per-tool schemas stay out "
             "of the model's context (mirrors the CLI's find->describe->invoke flow). "
-            "curated: the human-amplification block verbs (those returning a "
-            "next_block), the loop driver block-drive + the greenlight commit "
-            "append-decision, plus the recovery/opt-in verbs (doctor, kill, "
-            "net-triage, submit-speculate) — the surface install-commands registers. "
+            "curated: the CALLER-DRIVEN SUBMISSION instrument — the "
+            "human-amplification block verbs (those returning a next_block), the "
+            "loop driver block-drive + the greenlight commit append-decision, plus "
+            "the recovery/opt-in verbs (doctor, kill, net-triage, submit-speculate) "
+            "— the surface install-commands registers; the opt-in observation for "
+            "runs where you want evidence minted DURING execution. check: the "
+            "POST-EXPLORATION FIDELITY-CHECK surface — agents explore freestyle, "
+            "hpc-agent verifies ex-post: adopt-run, settle-run, aggregate-check/"
+            "aggregate-run (the reducer, never the LLM, computes the numbers), "
+            "verify-reproduction (claim-check vs human-claimed numbers), "
+            "verify-relay, cite-check, evidence-brief, read-decisions, "
+            "append-decision, reproduce-run, status-snapshot, plus the "
+            "submit-independent analysis-audit family (audit-preflight, "
+            "notebook-lint, notebook-audit-view, notebook-status, notebook-record). "
+            "A fixed allowlist intersected with the read/act policy: the "
+            "workflow/mutate members require --allow-mutations, so pair it. "
             "science: the run-queue PRODUCER subset for a coordinating agent (Claude "
             "Science) — EXACTLY queue-run + queue-status + queue-advance, disjoint "
             "from every gate-crossing verb (no queue-dispatch, no submit-*, no "

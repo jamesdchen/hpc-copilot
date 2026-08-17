@@ -121,6 +121,76 @@ class OrphanedReconcile:
     run_id: str
 
 
+# ── Adopted-run discrimination (post-exploration checker, 2026-08-14) ────────
+#
+# ``adopt-run`` adopts a run that was submitted OUTSIDE hpc-agent: the sidecar
+# is written post-hoc with the caller's job_ids, the journal record is minted
+# via submit-spec, and NO hpc-agent runtime was ever deployed alongside the
+# tasks — so the cluster carries no per-task status reporter, no announce
+# markers, and no ``.hpc/submit/<run_id>.jobmap`` marker. When reconcile's
+# reporter probe fails on such a run, that is NOT a transport fault and NOT a
+# broken cluster env: the control-plane machinery is structurally absent. The
+# bare ``unable_to_verify`` verdict (#258 / 0.10.12) told the operator nothing
+# about WHY — this discriminator extends the same terminal-cause discipline as
+# ``acceptance_evidence: "never_actuated"`` (pillar 5: a machine-readable cause
+# token plus a message COMPOSED from fields, never authored prose) onto the
+# ``last_status.verify_state`` seam:
+#
+#   * ``unable_to_verify`` + ``unable_to_verify_cause`` ABSENT — the historical
+#     reading, unchanged: a probe that should have worked failed (SSH blip,
+#     broken env). Scheduler evidence itself may be unreadable.
+#   * ``unable_to_verify`` + ``unable_to_verify_cause ==
+#     "adopted_run_control_plane_absent"`` — the run was adopted post-hoc, the
+#     reporter walk CANNOT succeed, and the scheduler alive-check on the
+#     adopted job_ids (which DID run — the cause is only stamped when the
+#     alive probe succeeded) is the available liveness signal. Terminal
+#     evidence is directed via ``hpc-agent settle-run``.
+#
+# This sits BESIDE (never replacing) the existing no-record classification:
+# an adopted run always HAS a journal record (adopt-run mints it), so it can
+# never be mistaken for crashed-submit residue (:class:`OrphanedReconcile`) or
+# stranded post-qsub ids — those branches key on the record being absent. A
+# normal in-flight run with a working reporter never reaches this stamp at all.
+_ADOPTED_UNVERIFIABLE_CAUSE = "adopted_run_control_plane_absent"
+
+
+def _is_adopted_run(sidecar: dict[str, Any]) -> bool:
+    """Whether *sidecar* marks the run as adopted post-hoc (``adopt-run``).
+
+    The ONE detection seam. ``adopt-run`` records its provenance inside the
+    sidecar's free-form ``extra`` pocket (``adopted`` / ``adopted_by`` /
+    ``provenance``) — never as a top-level key, which ``write_run_sidecar``
+    would not persist. All pocket spellings are recognised so the
+    discriminator keys on the durable local artifact, never on a cluster
+    read. An unreadable / absent sidecar (``{}``) reads as NOT adopted —
+    the historical behaviour is the default.
+    """
+    extra = sidecar.get("extra")
+    if isinstance(extra, dict):
+        if extra.get("adopted") or extra.get("adopted_by"):
+            return True
+        if extra.get("provenance") in ("adopted", "adopt-run"):
+            return True
+    return False
+
+
+def _adopted_unverifiable_note(record: RunRecord) -> str:
+    """Compose (never author) the adopted-run unable-to-verify disclosure.
+
+    Built from the record's own fields, pillar-5 style: what is unavailable
+    and WHY, which signal remains, and the directed remediation."""
+    ids = ", ".join(record.job_ids) if record.job_ids else "<none>"
+    return (
+        "per-task settle is unavailable: this run was adopted post-hoc "
+        "(adopt-run), so no hpc-agent runtime was deployed with it — the "
+        "cluster has no per-task status reporter, no announce markers and no "
+        "jobmap marker to read. Scheduler alive-checks on the adopted job_ids "
+        f"[{ids}] are the available liveness signal; once the run is "
+        "terminal, direct the terminal evidence via `hpc-agent settle-run` "
+        "(spec: {run_id, status, evidence})."
+    )
+
+
 # Sentinel-ack for the combined-wave listing (docs/design/connection-broker.md,
 # 2026-07-10). The listing is a POSITIVE success-marker scan: an empty result
 # must mean "the shell reached the remote dir and found no wave files", never
@@ -483,6 +553,17 @@ def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]
     ``unable_to_verify`` (#258) so callers can distinguish "cluster says it's
     still running" from "we couldn't ask" — different remediations. The marker
     lives in ``last_status.verify_state`` (set by :func:`_reconcile_one`).
+
+    An ADOPTED run (post-exploration checker: submitted outside hpc-agent,
+    adopted post-hoc via ``adopt-run``) that lands here because its reporter
+    probe failed additionally carries the discriminated cause
+    ``last_status.unable_to_verify_cause == "adopted_run_control_plane_absent"``
+    plus the composed ``last_status.unable_to_verify_note`` explaining that
+    per-task settle is structurally unavailable (no runtime was deployed with
+    the run), that scheduler alive-checks on the adopted job_ids are the
+    liveness signal, and that terminal evidence is directed via
+    ``hpc-agent settle-run``. A bare ``unable_to_verify`` (no cause key) keeps
+    the historical transport/env-fault reading unchanged.
 
     A ``failed`` verdict (#351 sub-bug #4 — the reporter showed positive
     ``failed >= 1`` task evidence) carries the classified error in
@@ -1578,6 +1659,21 @@ def _reconcile_one(
     # stale journal status as a confirmed reading.
     if alive_check_failed or reporter_failed:
         summary["verify_state"] = "unable_to_verify"
+        # Adopted-run discrimination (see _ADOPTED_UNVERIFIABLE_CAUSE above):
+        # when the RUN IS ADOPTED and the failure is the REPORTER ONLY — the
+        # scheduler alive-check ran fine — the reporter's absence is
+        # structural (no runtime was ever deployed), not a fault. Stamp the
+        # discriminated cause + the composed disclosure so the digest says
+        # WHY per-task settle is unavailable and what to do instead. An
+        # alive-check failure keeps the bare (transport-fault) reading even
+        # on an adopted run: the scheduler probe is the one signal an adopted
+        # run has, and its failure is a genuine connectivity problem the
+        # historical message already describes. Disclosure only — the
+        # verify_state routing, the journal status and every settle gate are
+        # byte-identical either way.
+        if reporter_failed and not alive_check_failed and _is_adopted_run(_sidecar):
+            summary["unable_to_verify_cause"] = _ADOPTED_UNVERIFIABLE_CAUSE
+            summary["unable_to_verify_note"] = _adopted_unverifiable_note(record)
 
     fields: dict[str, Any] = {
         "last_status": summary,

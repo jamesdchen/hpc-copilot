@@ -864,6 +864,21 @@ CLAIM_CONSISTENT_SENTENCE = (
     "the claim is consistent with a fresh observed run (within caller tolerance)"
 )
 
+#: The adopted-baseline variant of the consistency sentence. An adopted run was
+#: never observed by the tool (its sidecar carries the ``extra.adopted`` marker
+#: stamped by adopt-run), so the fresh-observed wording would overstate the
+#: evidence — the honest ceiling is consistency with the run's adopted records.
+#: Same comparator, same caller tolerance, same verbatim-relay rule.
+CLAIM_CONSISTENT_SENTENCE_ADOPTED = (
+    "the claim is consistent with the adopted run's records (within caller tolerance)"
+)
+
+
+def _is_adopted_sidecar(sidecar: dict[str, Any]) -> bool:
+    """The one detection seam for adopt-run's sidecar marker (``extra.adopted``)."""
+    extra = sidecar.get("extra")
+    return bool(isinstance(extra, dict) and extra.get("adopted"))
+
 
 def _assert_receipt_kind_matches_baseline(*, receipt_kind: str, external_baseline: bool) -> None:
     """The anti-laundering seam at the receipt-write boundary (ruling 6b).
@@ -976,8 +991,14 @@ def _run_claim_check(
         per_key = _compare_metrics(claim, repro_metrics, baseline.tolerance)
         overall = _fold_overall(per_key)
         if overall == "match":
-            consistency = CLAIM_CONSISTENT_SENTENCE
-            reason = CLAIM_CONSISTENT_SENTENCE
+            # An adopted run was never observed — render the honest ceiling.
+            sentence = (
+                CLAIM_CONSISTENT_SENTENCE_ADOPTED
+                if _is_adopted_sidecar(repro_sidecar)
+                else CLAIM_CONSISTENT_SENTENCE
+            )
+            consistency = sentence
+            reason = sentence
         else:
             drift = _claim_drift_disclosure(
                 baseline.claimed_data_sha, repro_sidecar.get("data_sha")
@@ -1080,6 +1101,22 @@ def verify_reproduction(
     fingerprint sample (onboard-by-reproduction, rulings 6a/6b).
     """
     if spec.external_baseline is not None:
+        # Checker obligation 3 (docs/internals/harness-contract.md): the claim
+        # is a HUMAN-AUTHORED input — a harness relaying its own harvested
+        # numbers as claimed_values would grade agent-authored text against
+        # agent-harvested numbers (the LLM-audits-LLM inversion). Gated at
+        # intake by the SAME derivation mechanism as goal/task_generator:
+        # under capability 1 (utterance log present) every claimed number must
+        # be human-derivable; absent the log the pass is DISCLOSED as the
+        # unverified fallback, never silent. Lazy import: the journal package
+        # is a decision-subject reach this query only pays in this mode.
+        from hpc_agent.ops.decision.journal import assert_elicited_value_human_authored
+
+        assert_elicited_value_human_authored(
+            experiment_dir,
+            field="claimed_values",
+            value=spec.external_baseline.claimed_values,
+        )
         return _run_claim_check(
             experiment_dir,
             repro_run_id=spec.repro_run_id,

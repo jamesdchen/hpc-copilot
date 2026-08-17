@@ -90,7 +90,55 @@ have the energy; it never refuses a bare `y`. Drift becomes a durable, counted
 fact on the record, not a block a tired human routes around at midnight. The
 full contribution statement, grounded link-by-link against the tree, is in
 [`docs/design/reproducibility-thesis.md`](docs/design/reproducibility-thesis.md)
-(the five-axis framing lives in [`docs/design/onboarding-map.md`](docs/design/onboarding-map.md)).
+(the five-axis framing lives in [`docs/design/onboarding-map.md`](docs/design/onboarding-map.md);
+the post-exploration positioning — why the checker is the primary offering and
+the submission loops are an opt-in observation instrument — in
+[`docs/design/post-exploration-checker.md`](docs/design/post-exploration-checker.md)).
+
+---
+
+## The checker happy path — adopt, aggregate, claim-check, attest
+
+Exploration is fastest when agents hand-roll their scripts and submit raw; no
+step-gate should stand between an idea and its run. hpc-agent's value-add sits
+**after** the fact — trust relocated, not skipped: no act asks permission,
+every act is adversarially verified after, and the hard boundaries stay exactly
+attestation, outward acts, and human intent. **Gate by irreversibility and
+attestation, never by step.** The happy path for a run that just finished,
+observed by nothing:
+
+1. **Adopt** — `adopt-run` mints the run record from what actually exists:
+   adoption facts elicited from you or from observed scheduler state (never
+   invented), the `cmd_sha` derived from the exact command (never free-typed).
+2. **Aggregate** — `aggregate-check` (readiness + integrity gate) then
+   `aggregate-run` (deterministic combine + reduce). The reducer — never the
+   language model — computes every aggregate number.
+3. **Claim-check** — `verify-reproduction` with an `external_baseline` block
+   compares the reduced numbers against human-claimed values under your
+   tolerance. The receipt is a `claim-check` — never a reproduction; an
+   unobserved run earns "consistent with", nothing more.
+4. **Attest** — `evidence-brief` projects the run's durable records into the
+   evidence digest; the decision journal keeps the audit trail.
+
+The `hpc-check` skill drives the chain end to end; for a claim that needs a
+fresh double run under observation, use `hpc-claim-check` instead
+(`hpc-check` adopts an already-executed run and never re-runs). None of it
+requires hpc-agent to have submitted the run — and the submit-independent
+checks engage on **any** experiment dir: the notebook-audit family
+(`audit-preflight`, `notebook-lint`, `notebook-audit-view`,
+`notebook-status`, `notebook-record`) audits a source against its template
+with no submission at all.
+
+## The loops: an opt-in observation instrument
+
+The submit / status / aggregate / campaign block-drive loops REMAIN — demoted
+from the default posture to an **opt-in instrument for runs where you want
+evidence minted DURING execution**: the double canary, the bind-locked
+determinism fingerprints, and the per-block journaling only accrue to runs driven
+through them. Choose the loops when the run is new and observed evidence is
+worth its consent ceremony; choose the checker when the run already happened.
+Everything below — the slash commands, the Quick Start, the block-drive driver —
+documents that instrument.
 
 ---
 

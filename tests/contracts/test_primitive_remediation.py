@@ -137,6 +137,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # gained a ``--spec`` surface (2026-07). Added to track the live CLI.
         "aggregate-check",
         "aggregate-run",
+        # adopt-run (post-exploration checker, 2026-08-14): the foreign-run
+        # ingest verb — spec-taking mutate with a REQUIRED run_id/command, so
+        # {} is invalid and it appears in the remediation probes.
+        "adopt-run",
         "append-decision",
         # Park-time diagnosis seam (2026-07-29): the code-composed request
         # query and the shape-validated opaque attach channel. Both specs

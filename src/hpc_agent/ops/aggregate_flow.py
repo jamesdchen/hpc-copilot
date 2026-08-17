@@ -917,6 +917,78 @@ def _run_scoped_results_subdir(
     return results_subdir
 
 
+def _mirror_tree_sample(results_local: Path, *, limit: int = 8) -> list[str]:
+    """A bounded sample of what the pull ACTUALLY landed in the local mirror.
+
+    Foreign-layout disclosure (post-exploration checker): when the pulled tree
+    does not match the run's declared layout, the failure must show what was
+    found, not just what was expected. Returns up to *limit* mirror-relative
+    file paths (sorted, so the sample is deterministic), preferring one entry
+    per top-level dir so the sample spans the tree instead of exhausting the
+    budget inside the first task dir. Best-effort and read-only: an unreadable
+    mirror returns ``[]`` — the sample decorates an error message and must
+    never mask the real failure with one of its own.
+    """
+    if not results_local.is_dir():
+        return []
+    try:
+        files = sorted(
+            str(p.relative_to(results_local)).replace("\\", "/")
+            for p in results_local.rglob("*")
+            if p.is_file()
+        )
+    except OSError:
+        return []
+    if len(files) <= limit:
+        return files
+    # Spread the budget: first file under each distinct top-level entry, then
+    # fill the remainder in sorted order.
+    picked: list[str] = []
+    seen_roots: set[str] = set()
+    for f in files:
+        root = f.split("/", 1)[0]
+        if root not in seen_roots:
+            seen_roots.add(root)
+            picked.append(f)
+            if len(picked) >= limit:
+                return picked
+    for f in files:
+        if f not in picked:
+            picked.append(f)
+            if len(picked) >= limit:
+                break
+    return picked
+
+
+def _expected_layout_note(
+    experiment_dir: Path, run_id: str, record: Any, *, summary_name: str
+) -> str:
+    """Compose the EXPECTED side of the layout mismatch: template + artifact.
+
+    Reads the run's declared ``result_dir_template`` (record first, sidecar
+    fallback — same sourcing as :func:`_run_scoped_results_subdir`) and names
+    the per-task summary artifact the reduce keys on, so the error states the
+    full contract the on-cluster tree was checked against.
+    """
+    template = getattr(record, "result_dir_template", None)
+    if not (isinstance(template, str) and template):
+        try:
+            from hpc_agent.state.runs import read_run_sidecar
+
+            template = read_run_sidecar(experiment_dir, run_id).get("result_dir_template")
+        except Exception:  # noqa: BLE001 — the note decorates an error; never raises
+            template = None
+    if isinstance(template, str) and template:
+        return (
+            f"expected per-task dirs matching result_dir_template {template!r} "
+            f"each containing the declared summary artifact {summary_name!r}"
+        )
+    return (
+        f"expected per-task dirs (no result_dir_template declared) each "
+        f"containing the declared summary artifact {summary_name!r}"
+    )
+
+
 def _per_task_metrics_reduce(
     experiment_dir: Path,
     run_id: str,
@@ -1104,6 +1176,22 @@ def _per_task_metrics_reduce(
         # Say what was actually observed: "no files matched" and "files
         # matched but none parsed" are different failures with different
         # remediations — the old single message blamed the tasks either way.
+        # Both branches state EXPECTED vs FOUND (foreign-layout disclosure,
+        # post-exploration checker): the declared result_dir_template + the
+        # summary artifact on the expected side, a bounded sample of what the
+        # pull actually mirrored on the found side — so a layout mismatch on
+        # an adopted/foreign tree is diagnosable from the message alone.
+        expected = _expected_layout_note(experiment_dir, run_id, record, summary_name=summary_name)
+        found_sample = _mirror_tree_sample(results_local)
+        if found_sample:
+            found = f"found (sample of the pulled tree under {results_local}): {found_sample}"
+        else:
+            found = (
+                f"found: the pull landed NO files in the local mirror "
+                f"{results_local} (nothing under "
+                f"{record.remote_path}/{scoped_subdir}/ matched the pull "
+                f"filter {include})"
+            )
         if result_dirs:
             detail = (
                 f"the pull mirrored {len(result_dirs)} {summary_name} sidecars "
@@ -1119,7 +1207,8 @@ def _per_task_metrics_reduce(
             f"no cluster-side _combiner/ for run_id {run_id!r} and the per-task "
             f"{results_subdir}/ fallback found no readable {summary_name} sidecars "
             f"under {record.remote_path}/{results_subdir}/. There is no numeric "
-            f"input to reduce — refusing to fabricate an aggregate. {detail}"
+            f"input to reduce — refusing to fabricate an aggregate. "
+            f"{expected}; {found}. {detail}"
         )
 
     # T4 ingestion-at-harvest (docs/design/data-trace.md §"Storage: emission is

@@ -223,3 +223,97 @@ def test_markdown_render_is_present_and_deterministic(tmp_path: Path) -> None:
     assert r1["markdown"] == r2["markdown"]
     assert "cite-check" in r1["markdown"]
     assert "0.9472" in r1["markdown"]
+
+
+# ── adopted (unobserved) runs — the disclosure, and the observed-run pin ───────
+
+_ADOPTED_SENTENCE = "no fingerprint envelope — run was adopted post-hoc, never observed by the tool"
+
+
+def _write_sidecar(experiment_dir: Path, run_id: str, *, adopted: bool) -> None:
+    """Seed a run sidecar through the REAL state writer (extra.adopted optional)."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        experiment_dir,
+        run_id=run_id,
+        cmd_sha="0" * 64,
+        hpc_agent_version="0.2.0",
+        submitted_at="2026-01-01T00:00:00Z",
+        executor="python3 run.py --seed $SEED",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=2,
+        tasks_py_sha="1" * 64,
+        extra={"adopted": {"by": "adopt-run", "at": "2026-01-01T00:00:00Z"}} if adopted else None,
+    )
+
+
+def test_adopted_run_discloses_missing_fingerprint_and_keeps_auditing(tmp_path: Path) -> None:
+    """Sidecar ``extra.adopted`` → the render discloses; the audit still runs."""
+    _seal(tmp_path, "run-m", {"qlike": "0.9427"})
+    _write_sidecar(tmp_path, "run-m", adopted=True)
+    result = _check(tmp_path, "We report 0.9427 and a typo 0.9472.", "run-m")
+    # The audit CONTINUED over what IS sealed — buckets unaffected.
+    kinds = _kinds(result)
+    assert kinds.get("0.9427") == "matched"
+    assert kinds.get("0.9472") == "uncitable"
+    # The disclosure sentence, verbatim, in the render.
+    assert _ADOPTED_SENTENCE in result["markdown"]
+    assert "run-m" in result["markdown"]
+    assert "Provenance disclosures" in result["markdown"]
+
+
+def test_adopted_via_journal_record_only_discloses(tmp_path: Path) -> None:
+    """No sidecar; a ``block == "adopt-run"`` journal record alone flags adoption."""
+    from hpc_agent.state.decision_journal import append_decision
+
+    _seal(tmp_path, "run-n", {"qlike": "0.9427"})
+    append_decision(tmp_path, scope_kind="run", scope_id="run-n", block="adopt-run", response="y")
+    result = _check(tmp_path, "Headline 0.9427.", "run-n")
+    assert _ADOPTED_SENTENCE in result["markdown"]
+    assert result["clean"] is True  # disclosure never moves the verdict
+
+
+def test_adopted_disclosure_changes_only_the_markdown(tmp_path: Path) -> None:
+    """DISCLOSURE ONLY: adopted vs observed twins differ in markdown alone."""
+    text = "We report 0.9427 and a typo 0.9472."
+    _seal(tmp_path, "run-obs", {"qlike": "0.9427"})
+    _seal(tmp_path, "run-adp", {"qlike": "0.9427"})
+    _write_sidecar(tmp_path, "run-obs", adopted=False)
+    _write_sidecar(tmp_path, "run-adp", adopted=True)
+    observed = _check(tmp_path, text, "run-obs")
+    adopted = _check(tmp_path, text, "run-adp")
+    # Every wire field except the seed identity + markdown is identical.
+    for key in ("clean", "claims_checked", "findings"):
+        assert observed[key] == adopted[key]
+    # The adopted markdown is the observed markdown + the appended section.
+    assert adopted["markdown"].startswith(observed["markdown"].replace("run-obs", "run-adp"))
+    assert _ADOPTED_SENTENCE in adopted["markdown"]
+    assert _ADOPTED_SENTENCE not in observed["markdown"]
+
+
+def test_observed_run_markdown_is_byte_identical_to_the_plain_render(tmp_path: Path) -> None:
+    """REGRESSION: an observed run's report is byte-identical to before the
+    adopted-run disclosure existed — exactly ``render_cite_check`` over the wire
+    fields, with no appended section."""
+    from hpc_agent.ops.cite_render import render_cite_check
+
+    _seal(tmp_path, "run-o", {"qlike": "0.9427"})
+    _write_sidecar(tmp_path, "run-o", adopted=False)
+    result = _check(tmp_path, "We report 0.9427 and a typo 0.9472.", "run-o")
+    plain = {k: v for k, v in result.items() if k != "markdown"}
+    assert result["markdown"] == render_cite_check(plain)
+    assert "Provenance disclosures" not in result["markdown"]
+
+
+def test_missing_fingerprint_never_crashes_the_audit(tmp_path: Path) -> None:
+    """No-crash pin: an adopted run with NO fingerprint ledger, no journal, and a
+    torn sidecar still audits (tolerant reads fail open to not-adopted)."""
+    _seal(tmp_path, "run-p", {"qlike": "0.9427"})
+    # A torn (invalid JSON) sidecar — read_run_sidecar_or_empty degrades to {}.
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / "run-p.json").write_text("{not json", encoding="utf-8")
+    result = _check(tmp_path, "Headline 0.9427.", "run-p")
+    assert _kinds(result).get("0.9427") == "matched"
+    assert _ADOPTED_SENTENCE not in result["markdown"]  # fail-open: not adopted

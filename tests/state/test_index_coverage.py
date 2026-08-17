@@ -228,6 +228,26 @@ def test_find_in_flight_orders_newest_first(tmp_path: Path) -> None:
     assert [r.run_id for r in find_in_flight_runs(tmp_path)] == ["newer", "older"]
 
 
+def test_find_in_flight_classifies_adopted_runs_by_status_alone(tmp_path: Path) -> None:
+    """Regression pin (post-exploration checker): an ADOPTED run — journal
+    record minted post-hoc for a run submitted outside hpc-agent — is
+    classified purely by its on-disk ``status``, exactly like an owned run.
+
+    Adopted + in_flight (job_ids recorded, no submit-time keystones: empty
+    script/backend/job_env) IS visible to the live set; adopted +
+    terminal-settled (settle-run directed evidence → ``complete``) is NOT
+    resurrected. No adoption-specific field may perturb the classification —
+    the discriminator is ``status``, which the adopt/settle path maintains.
+    """
+    live = _record("adopted-live", job_ids=["9001"])
+    assert live.script == "" and live.backend == "" and live.job_env == {}  # adopted shape
+    upsert_run(tmp_path, live)
+    upsert_run(tmp_path, _record("adopted-done", status="complete", job_ids=["9002"]))
+
+    got = [r.run_id for r in find_in_flight_runs(tmp_path)]
+    assert got == ["adopted-live"]
+
+
 # ── find_submitting_runs: F42 trust-the-record (independent implementation) ───
 
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hpc-agent"
 version = "0.11.4"
-description = "HPC orchestrator for Claude Code and external agent harnesses"
+description = "Post-exploration fidelity checker for agent-driven HPC work — adopt, aggregate, claim-check, attest — with an opt-in submission autopilot"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

@@ -192,6 +192,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
+| [adopt-run](adopt-run.md) | no | file_write: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent adopt-run --spec <path> [--experiment-dir <dir>]` |
 | [alerts-ack](alerts-ack.md) | yes | file_write: `~/.claude/hpc/<repo_hash>/doctor.alerts.seen` | `hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]` |
 | [append-decision](append-decision.md) | no | file_write: `<experiment>/.hpc/runs/<run_id>.decisions.jsonl` | `hpc-agent append-decision --spec <path> [--experiment-dir <dir>]` |
 | [archive-dossier](archive-dossier.md) | yes | network-upload: `s3://<bucket>/<key>` | `hpc-agent archive-dossier --spec <path>` |

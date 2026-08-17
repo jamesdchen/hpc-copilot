@@ -73,6 +73,11 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
     # who says "audit my analysis" into the loop, so the agent
     # freestyles instead. Same interview/relay split as the others.
     ("hpc-notebook-audit", "new-experiment-hpc"),
+    # Post-exploration checker front door (ex-post trust series): the
+    # freestyle run already happened; the human on-ramp elicits the
+    # adoption facts + any claimed numbers and relays the verdicts.
+    # Same interview/relay split as the others.
+    ("hpc-check", "check-hpc"),
 ]
 
 # Workflow-trigger slashes that route directly to the spawn pipeline

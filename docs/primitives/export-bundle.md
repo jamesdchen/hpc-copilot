@@ -126,6 +126,23 @@ identity is weak, `env_hash` never gated); an `uncitable` number rides the ledge
 as context, never a failure; the recipe's own gaps and the dossier's absent
 stores ride through. The verdict **never** stamps "reproducible".
 
+**Adopted (unobserved) runs** (`docs/design/post-exploration-checker.md`): a run
+adopted post-hoc via `adopt-run` was never observed by the tool. Its adoption
+decision-journal records, claim-check receipts
+(`_aggregated/<run_id>/claim_check_receipts.jsonl`), and reducer output are
+already sealed inside `dossier-evidence` when present (the dossier gathers the
+decision journal and the whole `_aggregated/<run_id>/` tree verbatim). What an
+adopted run **cannot** have appears as explicit `origin: "adoption"` ledger
+entries rather than absent keys: `unobserved-run` (the adoption fact),
+`fingerprint-not-captured` ("not captured (unobserved run)" — the fingerprint
+ledger is observed-runs-only), and `manifest-not-captured` for a data /
+environment-lock manifest not supplied at adoption. Detection reuses
+`hpc_agent.ops.cite_check.adopted_run_ids` (the `extra.adopted` sidecar pocket,
+falling through to the `block == "adopt-run"` journal record). **Disclosure
+only**: link statuses, the verdict, and every computed number are untouched, and
+a bundle over observed runs is byte-identical to before (regression-pinned in
+`tests/ops/test_publication_bundle_adopted.py`).
+
 ## Offline verify (no hpc-agent)
 
 The `VERIFY` manifest is **self-attesting** exactly as the dossier's

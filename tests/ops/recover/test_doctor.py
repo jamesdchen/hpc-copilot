@@ -114,6 +114,116 @@ def test_doctor_rejects_malformed_now(tmp_path: Path) -> None:
         doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="not-a-timestamp"))
 
 
+# ─── adopted runs: disclose, never propose recovery ─────────────────────────
+
+
+def _adopt(exp: Path, run_id: str) -> None:
+    """Journal the adoption record the adopt-run intake writes (block='adopt-run')."""
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block="adopt-run",
+        response="y",
+        proposal="adopt freestyle run submitted outside hpc-agent",
+        resolved={"adopted": True},
+    )
+
+
+def test_doctor_adopted_in_flight_stall_discloses_never_proposes_recovery(
+    tmp_path: Path,
+) -> None:
+    """An ADOPTED run (submitted outside hpc-agent, journaled post-hoc) whose
+    watchdog stamp lapsed must get a DISCLOSURE draft — scheduler / kill /
+    settle-run direction — never a re-arm / re-run / re-submit / retry /
+    redeploy proposal: hpc-agent did not submit its jobs and cannot
+    reconstruct their submission."""
+    now = "2026-08-14T01:00:00+00:00"
+    upsert_run(tmp_path, _record("freestyle"))
+    _adopt(tmp_path, "freestyle")
+    stamp_tick(
+        "freestyle",
+        last_tick_at="2026-08-14T00:00:00+00:00",
+        next_tick_due="2026-08-14T00:00:00+00:00",  # lapsed
+        experiment_dir=tmp_path,
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["stalled_count"] == 1
+    hit = out["stalled"][0]
+    assert hit["run_id"] == "freestyle"
+    proposal = hit["proposal"].lower()
+    assert "adopted" in proposal
+    assert "outside hpc-agent" in proposal
+    # The honest directions: scheduler, kill (job_ids only), settle-run.
+    assert "kill" in proposal
+    assert "settle-run" in proposal
+    assert "job_ids" in proposal
+    # NEVER a recovery the tool cannot honor for jobs it does not own.
+    for forbidden in ("re-arm", "re-run", "re-submit", "resubmit", "retry", "redeploy"):
+        assert forbidden not in proposal, f"adopted-run proposal drafts {forbidden!r}"
+
+
+def test_doctor_adopted_terminal_settled_run_is_silent(tmp_path: Path) -> None:
+    """An adopted run already settled terminal (settle-run directed evidence)
+    must not be resurrected by doctor: not stalled, not parked, no attention."""
+    now = "2026-08-14T01:00:00+00:00"
+    upsert_run(tmp_path, _record("done-freestyle", status="complete"))
+    _adopt(tmp_path, "done-freestyle")
+    stamp_tick(
+        "done-freestyle",
+        last_tick_at="2026-08-14T00:00:00+00:00",
+        next_tick_due="2026-08-14T00:00:00+00:00",  # lapsed, but the run is terminal
+        experiment_dir=tmp_path,
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["stalled_count"] == 0
+    assert out["stalled"] == []
+    assert out["parked_count"] == 0
+    assert out["awaiting_advance_count"] == 0
+    assert out["needs_attention"] is False
+
+
+def test_is_adopted_run_requires_the_positive_adoption_record(tmp_path: Path) -> None:
+    """The discriminator keys on the POSITIVE block='adopt-run' journal record:
+    no journal → not adopted; a settle-run-only journal (an hpc-agent run
+    settled by directed evidence) → not adopted; guard-can-fire both ways."""
+    from hpc_agent.ops.recover.doctor import _is_adopted_run
+
+    upsert_run(tmp_path, _record("own-run"))
+    assert _is_adopted_run(tmp_path, "own-run") is False  # no journal at all
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="own-run",
+        block="settle-run",
+        response="y",
+        proposal="directed settle of an hpc-agent-submitted run",
+    )
+    assert _is_adopted_run(tmp_path, "own-run") is False  # settled ≠ adopted
+    _adopt(tmp_path, "own-run")
+    assert _is_adopted_run(tmp_path, "own-run") is True  # the record flips it
+
+
+def test_doctor_non_adopted_stall_keeps_the_rearm_proposal(tmp_path: Path) -> None:
+    """Regression pin: the adopted-run guard must not perturb hpc-agent's own
+    runs — a plain stalled driver still drafts the re-arm proposal."""
+    now = "2026-08-14T01:00:00+00:00"
+    upsert_run(tmp_path, _record("own"))
+    stamp_tick(
+        "own",
+        last_tick_at="2026-08-14T00:00:00+00:00",
+        next_tick_due="2026-08-14T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+    assert out["stalled_count"] == 1
+    assert "re-arm" in out["stalled"][0]["proposal"].lower()
+
+
 # ─── parked ≠ stalled (§5) ──────────────────────────────────────────────────
 
 

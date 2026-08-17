@@ -17,6 +17,31 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — the post-exploration repositioning: the checker first, the loops demoted to opt-in (expost-trust plan, 2026-08-14)
+
+Begins the series relocating hpc-agent's trust to AFTER the fact: exploration
+stays fast and ungated (agents hand-roll scripts and submit raw), and the
+value-add becomes guaranteeing the fidelity of results ex post — the
+expost-trust principle, **gate by irreversibility and attestation, never by
+step** (`docs/plans/expost-trust-2026-07-30.md`).
+
+- **The `adopt-run` verb** (landed) — mints the run record for
+  a run that already happened, observed by nothing: adoption facts elicited
+  from the human or from observed scheduler state (never invented), `cmd_sha`
+  derived from the exact command (never free-typed).
+- **The `check` catalog tier + the `hpc-check` skill** (landed) — the
+  checker happy path end to end: `adopt-run` → `aggregate-check` /
+  `aggregate-run` → `verify-reproduction` (external-baseline claim-check) →
+  `evidence-brief`. The reducer — never the LLM — computes every aggregate
+  number; a claim-check is NEVER a reproduction.
+- **The loops demoted, never deleted.** The submit / status / aggregate /
+  campaign block-drive loops remain as an opt-in observation instrument for
+  runs where evidence should be minted DURING execution.
+- **Docs.** `docs/design/post-exploration-checker.md` promotes the plan into
+  design doctrine; README, `docs/integrations/CONTRACT.md`, and the harness
+  runbook (its generator-homed checker conformance walkthrough) present the
+  checker path first-class beside the loops.
+
 ### Added — declared retryable(n) failure classes on queue items (run-queue plan §7, 2026-07-29)
 
 The plan's last unblocked open decision, RESOLVED as proposed: `needs_human`

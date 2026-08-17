@@ -14,6 +14,7 @@ just falls back to the full path. See ``scripts/build_verb_module_map.py``.
 from __future__ import annotations
 
 VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
+    'adopt-run': ('adopt-run', 'hpc_agent.ops.adopt_run'),
     'aggregate-check': ('aggregate-check', 'hpc_agent.ops.aggregate_blocks'),
     'aggregate-flow': ('aggregate-flow', 'hpc_agent.ops.aggregate_flow'),
     'aggregate-preflight': ('aggregate-preflight', 'hpc_agent.ops.aggregate_preflight'),

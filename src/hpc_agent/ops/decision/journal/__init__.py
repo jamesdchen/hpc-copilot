@@ -133,7 +133,13 @@ from .conclusion import (
     _assert_conclusion_revoke_floor,
 )
 from .human_authorship import (
+    ELICITED_CHECKER_FIELDS,
+    ELICITED_FREE_TEXT_FIELDS,
+    ELICITED_STRUCTURED_FIELDS,
+    FACT_PROVENANCE_KINDS,
     _assert_human_authorship,
+    assert_adoption_fact_provenance,
+    assert_elicited_value_human_authored,
 )
 from .module_signoff import (
     _MODULE_SIGNOFF_BLOCK,
@@ -460,6 +466,10 @@ def read_decisions(*, experiment_dir: Path, spec: ReadDecisionsInput) -> ReadDec
 
 
 __all__ = [
+    "ELICITED_CHECKER_FIELDS",
+    "ELICITED_FREE_TEXT_FIELDS",
+    "ELICITED_STRUCTURED_FIELDS",
+    "FACT_PROVENANCE_KINDS",
     "_AUTHORSHIP_EVIDENCE_MISSING",
     "_AUTHORSHIP_HOME_ACTIONS",
     "_AUTHORSHIP_HOME_BLOCK",
@@ -542,5 +552,7 @@ __all__ = [
     "_target_record_ts",
     "_valid_review_horizon",
     "append_decision",
+    "assert_adoption_fact_provenance",
+    "assert_elicited_value_human_authored",
     "read_decisions",
 ]

@@ -53,10 +53,12 @@ from hpc_agent.state.block_terminal import read_terminal_with_fallback
 from hpc_agent.state.decision_journal import (
     is_committed_greenlight_for_boundary,
     latest_decision,
+    read_decisions,
 )
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
 from hpc_agent.state.journal import read_pending_decision
 from hpc_agent.state.run_record import current_homedir
+from hpc_agent.state.runs import read_run_sidecar
 
 __all__ = ["doctor", "find_stalled_runs_fleet", "scan_dead_detached_workers"]
 
@@ -106,6 +108,53 @@ def find_stalled_runs_fleet(now_iso: str) -> list[dict[str, Any]]:
     return stalled
 
 
+def _is_adopted_run(experiment_dir: Path, run_id: str) -> bool:
+    """True when *run_id* was ADOPTED — submitted OUTSIDE hpc-agent, recorded post-hoc.
+
+    The post-exploration checker chain (``docs/design/post-exploration-checker.md``)
+    adopts freestyle runs: the sidecar is written after the fact, the journal
+    record is minted through the recording-only submit path (zero qsub), and the
+    cluster runtime hpc-agent's own submits deploy — the per-task status
+    reporter, the announce dirs, the ``.hpc/submit/<run_id>.jobmap`` marker —
+    does NOT exist for them. Two durable local adoption markers exist, and this
+    predicate accepts either as POSITIVE evidence (never the absence of
+    submit-time fields — empty ``script``/``backend`` is also what every
+    pre-#299 record looks like, and absence proves nothing):
+
+    * the sidecar's ``extra.adopted`` stamp, written UNCONDITIONALLY by
+      ``adopt-run`` at intake — the only marker an adopted run still in flight
+      carries, because the ``block == "adopt-run"`` journal record below is
+      written only by the terminal directed-settle branch;
+    * a decision-journal record with ``block == "adopt-run"`` (the terminal
+      settle sign-off), kept as a second key so a run whose sidecar was pruned
+      or hand-edited still reads as adopted once settled.
+
+    Why the doctor cares: an adopted run's jobs are NOT hpc-agent array tasks.
+    The tool did not submit them and cannot reconstruct their submission, so a
+    recovery proposal that says "re-arm the driver" / "safe to re-submit" is a
+    misfire — the honest directions are the scheduler itself (the recorded
+    ``job_ids``), ``kill`` (which needs only those ids), and ``settle-run``
+    with directed evidence once the run is terminal.
+
+    Fail-open to NOT adopted: a missing/unreadable decision journal or a
+    non-fs-safe run_id reads as the hpc-agent-submitted default, leaving every
+    existing proposal byte-identical.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+        extra = sidecar.get("extra")
+        if isinstance(extra, dict) and extra.get("adopted"):
+            return True
+    except Exception:  # noqa: BLE001 — a missing/torn sidecar falls through to the journal key
+        pass
+    try:
+        return any(
+            rec.get("block") == "adopt-run" for rec in read_decisions(experiment_dir, "run", run_id)
+        )
+    except Exception:  # noqa: BLE001 — a torn journal must never break the watchdog scan
+        return False
+
+
 def _overdue_seconds(next_tick_due: str | None, now: str) -> int | None:
     """Whole seconds by which *next_tick_due* precedes *now*, or ``None``."""
     due_dt = parse_iso_utc_or_none(next_tick_due)
@@ -115,8 +164,19 @@ def _overdue_seconds(next_tick_due: str | None, now: str) -> int | None:
     return max(0, int((now_dt - due_dt).total_seconds()))
 
 
-def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
-    """Turn one ``find_stalled_runs`` hit into a drafted (never-enacted) proposal."""
+def _draft_proposal(
+    stalled: dict[str, Any], *, now: str, adopted: bool = False
+) -> StalledRunProposal:
+    """Turn one ``find_stalled_runs`` hit into a drafted (never-enacted) proposal.
+
+    *adopted* (:func:`_is_adopted_run`) flips the draft from a recovery
+    proposal to a DISCLOSURE: an adopted run has no hpc-agent driver to re-arm
+    and no reconstructible submission to re-submit — the tool did not submit
+    it. The adopted draft states the run's condition and directs the human to
+    the scheduler (the recorded ``job_ids``), ``kill``, or ``settle-run`` with
+    directed evidence; it NEVER proposes retry / re-submit / re-arm /
+    redeploy-runtime for jobs hpc-agent does not own.
+    """
     last_tick_at = stalled.get("last_tick_at")
     next_tick_due = stalled.get("next_tick_due")
     overdue = _overdue_seconds(next_tick_due, now)
@@ -127,7 +187,22 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
     # and both the proposal text and evidence stay byte-identical to today.
     exp_dir = stalled.get("experiment_dir")
     where = f" [{exp_dir}]" if exp_dir else ""
-    if stalled.get("status") == "submitting":
+    if adopted:
+        # An ADOPTED (freestyle, submitted-outside-hpc-agent) run: no per-task
+        # reporter, no announce dirs, no jobmap marker, no driver of ours to
+        # re-arm. Disclose, and direct toward the verbs that work off the
+        # sidecar's job_ids alone — never a re-arm / re-submit the tool cannot
+        # honor (it did not submit these jobs and cannot reconstruct them).
+        proposal = (
+            f"adopted run last updated {since}, status {stalled.get('status')}{where}: "
+            f"this run was submitted OUTSIDE hpc-agent and adopted post-hoc — hpc-agent "
+            f"did not submit its jobs and cannot reconstruct their submission, so no "
+            f"recovery action is drafted. Check the scheduler directly against its "
+            f"recorded job_ids; cancel a stuck run via `hpc-agent kill` (it needs only "
+            f"the recorded job_ids); once it is genuinely finished, settle it via "
+            f"`hpc-agent settle-run` with directed evidence."
+        )
+    elif stalled.get("status") == "submitting":
         # A submit that died in its dispatch→job-id window (submit-once §3.3):
         # the durable evidence is a submitting-with-no-job-ids orphan. The safe
         # recovery is reconcile-recovery (re-derive from the cluster: adopt the
@@ -770,7 +845,22 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         stalled = find_stalled_runs_fleet(now)
     else:
         stalled = find_stalled_runs(now, experiment_dir=experiment_dir)
-    proposals = [_draft_proposal(hit, now=now) for hit in stalled]
+    # Adopted-run guard: a freestyle run adopted post-hoc (adopt-run) has no
+    # hpc-agent driver to re-arm and no reconstructible submission — its draft
+    # is a disclosure directing to scheduler/kill/settle-run, never a re-arm or
+    # re-submit proposal. Keyed per hit on the POSITIVE adoption record in the
+    # decision journal (fleet hits resolve against their OWN experiment_dir).
+    proposals = [
+        _draft_proposal(
+            hit,
+            now=now,
+            adopted=_is_adopted_run(
+                Path(hit["experiment_dir"]) if hit.get("experiment_dir") else experiment_dir,
+                hit["run_id"],
+            ),
+        )
+        for hit in stalled
+    ]
 
     # Parked ≠ stalled (§5): runs awaiting a human decision are surfaced as a
     # distinct read, never a re-arm proposal. find_stalled_runs already excludes

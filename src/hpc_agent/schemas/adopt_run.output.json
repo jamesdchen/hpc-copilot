@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/adopt_run.output.json",
+  "title": "adopt-run output data",
+  "description": "The adoption outcome — what was recorded and where to go next.\n\n``stage_reached``:\n\n* ``adopted_in_flight`` — sidecar + journal record written (status\n  ``in_flight``); ``next_block`` hands off to ``status-watch``.\n* ``adopted_terminal`` — sidecar + journal record written and the run\n  settled ``complete`` through the settle-run mechanism on the directed\n  ``terminal_evidence``; ``next_block`` hands off to ``aggregate-check``.\n* ``needs_elicitation`` — the result layout could not be inferred; NOTHING\n  was written. ``needs_decision`` is True and the reason names exactly what\n  to supply (``result_dir_template`` + ``task_count``). ``next_block`` is\n  null (a human branch).",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "run_id",
+    "cmd_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "The boundary the adoption stopped at.",
+      "enum": [
+        "adopted_in_flight",
+        "adopted_terminal",
+        "needs_elicitation"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True only on needs_elicitation — the caller must supply the named layout fields.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the adoption outcome.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "The adopted run's run_id.",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "cmd_sha": {
+      "description": "The DERIVED parameter identity: sha256 of the stripped command (64 hex).",
+      "title": "Cmd Sha",
+      "type": "string"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Journal status after adoption: in_flight, complete, or null on needs_elicitation.",
+      "title": "Status"
+    },
+    "job_ids": {
+      "description": "Job ids recorded on the journal record ([] on the terminal branch).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
+    },
+    "task_count": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The recorded (caller-supplied or inferred) task count.",
+      "title": "Task Count"
+    },
+    "result_dir_template": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The recorded (caller-supplied or inferred) result_dir_template.",
+      "title": "Result Dir Template"
+    },
+    "sidecar_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Absolute path of the written sidecar (null on needs_elicitation).",
+      "title": "Sidecar Path"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The {verb, why, spec_hint} hand-off — status-watch on the in-flight branch, aggregate-check on the terminal branch, null on needs_elicitation. verify-reproduction in external-baseline mode is the claim-comparison path once results are aggregated.",
+      "title": "Next Block"
+    }
+  }
+}
